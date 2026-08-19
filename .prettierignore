@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+public/icons
+
+# Markdown is authored by hand (governance docs are ratified and must not be
+# reformatted as an implementation act — see AGENT_RULES.md §8). Prettier
+# governs code, config, and JSON only.
+*.md
+**/*.md

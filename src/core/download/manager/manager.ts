@@ -1,0 +1,670 @@
+/**
+ * Module: core/download/manager (implementation)
+ * Purpose: DownloadManager implementation (PROJECT_BIBLE.md §10.1): validated
+ *          lifecycle, priority-bounded scheduling, native transfer via the injected
+ *          DownloadsAdapter, progress, retry (backoff), cancellation, persistence,
+ *          and events. The single authority over downloads.
+ * Restrictions: Domain layer — NEVER touches chrome/browser; all transfers go
+ *          through the injected DownloadsAdapter (§8.4, §10.8). Deterministic given
+ *          injected clock/id/timer.
+ * Public API: DownloadManagerDeps, createDownloadManager.
+ */
+import { DownloadError, PlatformError } from '@shared/result/errors';
+import type { AppError } from '@shared/result';
+import type { DownloadTask, HistoryRecord, MediaItem, TaskState } from '@shared/types';
+import { TypedEventEmitter } from '@shared/utils';
+import type { ConflictAction, DownloadChange, DownloadsAdapter } from '@platform/downloads';
+import type { ConcurrencyLimiter, ReleaseSlot } from '@core/download/concurrency';
+import { resolveCollision } from '@core/download/filename/filename';
+import type { FilenameGenerator } from '@core/download/filename';
+import type { HistoryService } from '@core/history';
+import type {
+  DownloadEventMap,
+  DownloadManager,
+  EnqueueOptions,
+  QueueState,
+  Unsubscribe,
+} from '@core/download/manager';
+import type { DownloadQueue, QueueStats } from '@core/download/queue';
+import type { ProgressTracker } from '@core/download/progress';
+import type { RetryPolicy } from '@core/download/retry';
+import { assertTransition, TERMINAL_STATES } from '@core/download/state';
+import { validateDownloadable } from '@core/download/validate';
+
+/** Cancels a scheduled timer. */
+type CancelTimer = () => void;
+
+export interface DownloadManagerDeps {
+  readonly downloads: DownloadsAdapter;
+  readonly queue: DownloadQueue;
+  readonly concurrency: ConcurrencyLimiter;
+  readonly retryPolicy: RetryPolicy;
+  readonly filename: FilenameGenerator;
+  readonly progress: ProgressTracker;
+  readonly history?: HistoryService;
+  readonly clock: () => number;
+  readonly filenameTemplate: string;
+  readonly conflictAction: ConflictAction;
+  readonly downloadSubfolder?: string;
+  readonly generateId?: () => string;
+  readonly scheduleTimer?: (delayMs: number, callback: () => void) => CancelTimer;
+}
+
+const SCHEDULABLE: ReadonlySet<TaskState> = new Set<TaskState>([
+  'queued',
+  'preparing',
+  'active',
+  'retrying',
+  'canceling',
+]);
+
+export function createDownloadManager(deps: DownloadManagerDeps): DownloadManager {
+  const { downloads, queue, concurrency, retryPolicy, filename, progress, clock } = deps;
+  const emitter = new TypedEventEmitter<DownloadEventMap>();
+  const generateId = deps.generateId ?? ((): string => crypto.randomUUID());
+  const scheduleTimer =
+    deps.scheduleTimer ??
+    ((ms: number, cb: () => void): CancelTimer => {
+      const handle = setTimeout(cb, ms);
+      return () => {
+        clearTimeout(handle);
+      };
+    });
+
+  const subscribers = new Set<(state: QueueState) => void>();
+  const nativeToJob = new Map<number, string>();
+  const releases = new Map<string, ReleaseSlot>();
+  const retryTimers = new Map<string, CancelTimer>();
+  let queuePaused = false;
+  let disposed = false;
+  let hadPending = false;
+
+  const notify = (): void => {
+    const state: QueueState = { tasks: queue.list() };
+    for (const listener of [...subscribers]) {
+      listener(state);
+    }
+  };
+
+  const patch = async (
+    task: DownloadTask,
+    changes: Partial<DownloadTask>,
+  ): Promise<DownloadTask> => {
+    const next: DownloadTask = { ...task, ...changes, updatedAt: clock() };
+    await queue.update(next);
+    notify();
+    return next;
+  };
+
+  const transition = async (
+    task: DownloadTask,
+    to: TaskState,
+    changes: Partial<DownloadTask> = {},
+  ): Promise<DownloadTask> => {
+    assertTransition(task.state, to);
+    return patch(task, { ...changes, state: to });
+  };
+
+  const finishSlot = (jobId: string): void => {
+    const release = releases.get(jobId);
+    if (release !== undefined) {
+      releases.delete(jobId);
+      release();
+    }
+  };
+
+  const clearRetryTimer = (jobId: string): void => {
+    const cancel = retryTimers.get(jobId);
+    if (cancel !== undefined) {
+      retryTimers.delete(jobId);
+      cancel();
+    }
+  };
+
+  // Defense in depth: the configured subfolder is untrusted (validated in a later
+  // phase). Drop traversal ('..'), absolute anchors (leading '/'), drive letters,
+  // and backslashes so it can never escape the browser downloads directory (§13.5).
+  const sanitizeSubfolder = (raw: string): string =>
+    raw
+      .replace(/\\/g, '/')
+      .split('/')
+      .map((segment) => segment.trim())
+      .filter((segment) => segment !== '' && segment !== '.' && segment !== '..')
+      .map((segment) => segment.replace(/^[A-Za-z]:$/, ''))
+      .filter((segment) => segment !== '')
+      .join('/');
+
+  const activeFilenames = (excludeId?: string): Set<string> => {
+    const names = new Set<string>();
+    for (const task of queue.list()) {
+      if (task.id === excludeId) {
+        continue;
+      }
+      if (task.state === 'active' || task.state === 'preparing') {
+        names.add(task.filename);
+      }
+    }
+    return names;
+  };
+
+  const recordHistory = (task: DownloadTask, outcome: 'completed' | 'failed'): void => {
+    if (deps.history === undefined) {
+      return;
+    }
+    const record: HistoryRecord = {
+      id: task.id,
+      title: task.item.title,
+      kind: task.item.kind,
+      originHost: task.item.originHost,
+      timestamp: clock(),
+      outcome,
+      filename: task.filename,
+      ...(task.item.container !== undefined && { container: task.item.container }),
+      ...(task.bytesTotal !== undefined && { sizeBytes: task.bytesTotal }),
+    };
+    void deps.history.record(record).catch((cause: unknown) => {
+      emitError('history-record-failed', cause);
+    });
+  };
+
+  const emitError = (code: string, cause: unknown): void => {
+    const error =
+      cause instanceof PlatformError
+        ? cause.toAppError()
+        : new DownloadError('Download subsystem error', {
+            code,
+            messageKey: 'error.download.internal',
+            cause,
+          }).toAppError();
+    emitter.emit('error', error);
+  };
+
+  const toDownloadError = (cause: unknown): AppError => {
+    if (cause instanceof PlatformError) {
+      return cause.toAppError();
+    }
+    return new DownloadError('Native download failed', {
+      code: 'download-native-failed',
+      messageKey: 'error.download.native',
+      retryable: true,
+      cause,
+    }).toAppError();
+  };
+
+  const checkQueueCompletion = (): void => {
+    const pending = queue.list().some((task) => SCHEDULABLE.has(task.state));
+    if (pending) {
+      hadPending = true;
+      return;
+    }
+    if (hadPending) {
+      hadPending = false;
+      const stats = queue.stats();
+      emitter.emit('queue:completed', {
+        completed: stats.completed,
+        failed: stats.failed,
+        canceled: stats.canceled,
+      });
+    }
+  };
+
+  const handleFailure = async (task: DownloadTask, error: AppError): Promise<void> => {
+    // Re-read live state: only a running transfer can fail. A concurrent
+    // cancel/pause/complete/remove owns the job otherwise; failing (and retrying) it
+    // would be a forbidden transition and could retry/resurrect a cancelled or
+    // removed job (§6, §10.2). Bail if it left the queue — never re-insert it.
+    const current = queue.getById(task.id);
+    if (current === undefined || (current.state !== 'active' && current.state !== 'preparing')) {
+      return;
+    }
+    const failed = await transition(current, 'failed', { error, completedAt: clock() });
+    if (current.nativeDownloadId !== undefined) {
+      nativeToJob.delete(current.nativeDownloadId);
+    }
+    progress.remove(current.id);
+    finishSlot(current.id);
+    // Drop any prior retry timer before (re)scheduling so it cannot leak.
+    clearRetryTimer(current.id);
+    const decision = retryPolicy.shouldRetry(error, current.attempt);
+    if (decision.retry) {
+      const retrying = await transition(failed, 'retrying');
+      emitter.emit('retry:scheduled', {
+        task: retrying,
+        delayMs: decision.delayMs,
+        attempt: current.attempt,
+      });
+      retryTimers.set(
+        current.id,
+        scheduleTimer(decision.delayMs, () => {
+          void requeueAfterRetry(current.id);
+        }),
+      );
+    } else {
+      recordHistory(failed, 'failed');
+      emitter.emit('job:failed', failed);
+    }
+  };
+
+  const requeueAfterRetry = async (jobId: string): Promise<void> => {
+    retryTimers.delete(jobId);
+    const job = queue.getById(jobId);
+    if (job === undefined || job.state !== 'retrying') {
+      return;
+    }
+    await transition(job, 'queued', { attempt: job.attempt + 1 });
+    pump();
+  };
+
+  const completeJob = async (jobId: string): Promise<void> => {
+    const job = queue.getById(jobId);
+    // Only a live 'active' job may complete. A concurrent cancel/pause (→canceling
+    // /paused/terminal) owns the job otherwise; completing it would be a forbidden
+    // transition (e.g. canceling→completed) and would resurrect a cancelled job.
+    if (job === undefined || job.state !== 'active') {
+      return;
+    }
+    const done = await transition(job, 'completed', {
+      completedAt: clock(),
+      progress: 1,
+      ...(job.bytesTotal !== undefined && { bytesReceived: job.bytesTotal }),
+    });
+    if (job.nativeDownloadId !== undefined) {
+      nativeToJob.delete(job.nativeDownloadId);
+    }
+    progress.remove(jobId);
+    finishSlot(jobId);
+    recordHistory(done, 'completed');
+    emitter.emit('job:completed', done);
+    pump();
+    checkQueueCompletion();
+  };
+
+  const handleChange = async (change: DownloadChange): Promise<void> => {
+    const jobId = nativeToJob.get(change.id);
+    if (jobId === undefined) {
+      return;
+    }
+    // Only a live 'active' job reacts to native events (fast pre-check).
+    if (queue.getById(jobId)?.state !== 'active') {
+      return;
+    }
+
+    // Enrich progress from the adapter (bytes are not carried on the change event).
+    let snapshotState = change.state;
+    let sample:
+      { readonly received: number | undefined; readonly total: number | undefined } | undefined;
+    try {
+      const p = await downloads.getProgress(change.id);
+      if (p !== undefined) {
+        snapshotState = p.state ?? change.state;
+        sample = { received: p.bytesReceived, total: p.bytesTotal };
+      }
+    } catch (cause) {
+      emitError('download-progress-failed', cause);
+    }
+
+    // Re-read AFTER the await: a concurrent cancel/pause may have moved the job out
+    // of 'active'. Never patch/complete/fail a job that is no longer active, or a
+    // stale snapshot would resurrect it into a live/terminal state (§10.2).
+    const job = queue.getById(jobId);
+    if (job === undefined || job.state !== 'active') {
+      return;
+    }
+    let updated = job;
+    if (sample !== undefined) {
+      const received = sample.received ?? job.bytesReceived ?? 0;
+      progress.record(jobId, received, sample.total);
+      const ratio = progress.snapshot(jobId)?.ratio;
+      updated = await patch(job, {
+        bytesReceived: received,
+        ...(sample.total !== undefined && { bytesTotal: sample.total }),
+        ...(ratio !== undefined && { progress: ratio }),
+      });
+    }
+
+    if (snapshotState === 'completed') {
+      await completeJob(jobId);
+    } else if (snapshotState === 'failed') {
+      await handleFailure(updated, toDownloadError(new Error('Native download interrupted')));
+      pump();
+      checkQueueCompletion();
+    } else {
+      emitter.emit('progress', updated);
+    }
+  };
+
+  const startJob = async (job: DownloadTask, release: ReleaseSlot): Promise<void> => {
+    releases.set(job.id, release);
+    const prepared = await transition(job, 'preparing');
+    emitter.emit('job:preparing', prepared);
+    try {
+      // Exclude THIS job from the collision set — it was just persisted as
+      // 'preparing', so including it would make every download self-collide (§10.7).
+      const name = resolveCollision(prepared.filename, activeFilenames(job.id));
+      const subfolder =
+        deps.downloadSubfolder !== undefined ? sanitizeSubfolder(deps.downloadSubfolder) : '';
+      const target = subfolder !== '' ? `${subfolder}/${name}` : name;
+      const nativeId = await downloads.start({
+        url: prepared.item.url,
+        filename: target,
+        conflictAction: deps.conflictAction,
+        saveAs: false,
+      });
+      const current = queue.getById(job.id);
+      if (current === undefined || current.state === 'canceling' || current.state === 'canceled') {
+        await downloads.cancel(nativeId).catch(() => undefined);
+        // Re-read AFTER the cancel await: a concurrent cancelJob/removeJob may have
+        // finalized the job already. Only finalize (and emit) if it is still
+        // 'canceling', else we would double-emit or resurrect a removed job.
+        const settled = queue.getById(job.id);
+        if (settled !== undefined && settled.state === 'canceling') {
+          const canceled = await transition(settled, 'canceled', { completedAt: clock() });
+          emitter.emit('job:cancelled', canceled);
+        }
+        finishSlot(job.id);
+        pump();
+        checkQueueCompletion();
+        return;
+      }
+      nativeToJob.set(nativeId, job.id);
+      const active = await transition(current, 'active', {
+        nativeDownloadId: nativeId,
+        filename: name,
+        startedAt: clock(),
+      });
+      emitter.emit('job:started', active);
+    } catch (cause) {
+      // Use the LIVE job; if a concurrent remove dropped it, never resurrect it via
+      // the stale `prepared` snapshot — just release the slot.
+      const live = queue.getById(job.id);
+      if (live !== undefined) {
+        await handleFailure(live, toDownloadError(cause));
+      } else {
+        finishSlot(job.id);
+      }
+      pump();
+      checkQueueCompletion();
+    }
+  };
+
+  const pump = (): void => {
+    // Track that work exists so queue:completed can fire once the queue drains.
+    if (queue.list().some((task) => SCHEDULABLE.has(task.state))) {
+      hadPending = true;
+    }
+    if (disposed || queuePaused) {
+      return;
+    }
+    for (;;) {
+      const job = queue.nextQueued();
+      if (job === undefined) {
+        break;
+      }
+      const release = concurrency.tryAcquire();
+      if (release === undefined) {
+        break;
+      }
+      void startJob(job, release);
+    }
+  };
+
+  const unsubDownloads = downloads.onChanged((change) => {
+    void handleChange(change);
+  });
+
+  const createJob = (item: MediaItem, priority: number, index: number): DownloadTask => {
+    const name = filename.generate(item, deps.filenameTemplate, index);
+    return {
+      id: generateId(),
+      item,
+      state: 'queued',
+      filename: name,
+      originalFilename: name,
+      attempt: 0,
+      priority,
+      createdAt: clock(),
+      updatedAt: clock(),
+    };
+  };
+
+  const cancelJob = async (taskId: string): Promise<void> => {
+    const job = queue.getById(taskId);
+    if (job === undefined || job.state === 'failed' || TERMINAL_STATES.has(job.state)) {
+      return;
+    }
+    clearRetryTimer(taskId);
+    if (job.state === 'active' || job.state === 'preparing' || job.state === 'canceling') {
+      // Route through 'canceling' (valid from active/preparing). A 'preparing' job
+      // may have no native id yet (startJob still awaiting downloads.start) —
+      // preparing→canceled is NOT a legal edge, so we must go via 'canceling'.
+      if (job.state !== 'canceling') {
+        await transition(job, 'canceling');
+      }
+      if (job.nativeDownloadId !== undefined) {
+        await downloads.cancel(job.nativeDownloadId).catch(() => undefined);
+        nativeToJob.delete(job.nativeDownloadId);
+      }
+      // startJob (resuming from its start() await) may finalize a preparing job
+      // first; only finalize here if it is still 'canceling'.
+      const current = queue.getById(taskId);
+      if (current !== undefined && current.state === 'canceling') {
+        const canceled = await transition(current, 'canceled', { completedAt: clock() });
+        progress.remove(taskId);
+        finishSlot(taskId);
+        emitter.emit('job:cancelled', canceled);
+      }
+    } else {
+      // queued / paused / retrying — no native transfer to stop.
+      const canceled = await transition(job, 'canceled', { completedAt: clock() });
+      progress.remove(taskId);
+      emitter.emit('job:cancelled', canceled);
+    }
+    pump();
+    checkQueueCompletion();
+  };
+
+  const removeJob = async (taskId: string): Promise<void> => {
+    const initial = queue.getById(taskId);
+    if (initial === undefined) {
+      return;
+    }
+    clearRetryTimer(taskId);
+    if (
+      initial.nativeDownloadId !== undefined &&
+      (initial.state === 'active' || initial.state === 'preparing' || initial.state === 'canceling')
+    ) {
+      await downloads.cancel(initial.nativeDownloadId).catch(() => undefined);
+      nativeToJob.delete(initial.nativeDownloadId);
+    }
+    // Re-read AFTER the cancel await: a concurrent complete/cancel may have finalized
+    // (or removed) the job. Drive it to 'removed' only through legal edges from its
+    // LIVE state — never assert a transition off a stale snapshot (§10.2).
+    let job = queue.getById(taskId);
+    if (job === undefined) {
+      return;
+    }
+    if (job.state === 'active' || job.state === 'preparing') {
+      job = await transition(job, 'canceling');
+    }
+    if (job.state === 'canceling') {
+      job = await transition(job, 'canceled', { completedAt: clock() });
+      finishSlot(taskId);
+    }
+    job = await transition(job, 'removed');
+    await queue.remove(taskId);
+    progress.remove(taskId);
+    notify();
+    pump();
+    checkQueueCompletion();
+  };
+
+  return {
+    async enqueue(
+      items: readonly MediaItem[],
+      options?: EnqueueOptions,
+    ): Promise<readonly DownloadTask[]> {
+      const priority = options?.priority ?? 0;
+      const created: DownloadTask[] = [];
+      let index = 0;
+      for (const item of items) {
+        const job = createJob(item, priority, index);
+        index += 1;
+        const validation = validateDownloadable(item);
+        if (validation.ok) {
+          await queue.add(job);
+          emitter.emit('job:queued', job);
+          created.push(job);
+        } else {
+          const appError = validation.error.toAppError();
+          const failed: DownloadTask = {
+            ...job,
+            state: 'failed',
+            error: appError,
+            completedAt: clock(),
+          };
+          await queue.add(failed);
+          emitter.emit('error', appError);
+          emitter.emit('job:failed', failed);
+          created.push(failed);
+        }
+      }
+      notify();
+      pump();
+      return created;
+    },
+
+    cancel(taskId: string): Promise<void> {
+      return cancelJob(taskId);
+    },
+
+    async pause(taskId: string): Promise<void> {
+      const job = queue.getById(taskId);
+      if (job === undefined) {
+        return;
+      }
+      if (job.state === 'queued') {
+        await transition(job, 'paused');
+      } else if (job.state === 'active' && job.nativeDownloadId !== undefined) {
+        await transition(job, 'canceling');
+        await downloads.cancel(job.nativeDownloadId).catch(() => undefined);
+        nativeToJob.delete(job.nativeDownloadId);
+        finishSlot(taskId);
+        // Re-read AFTER the cancel await: a concurrent cancel/remove may have already
+        // driven the job to a terminal state. Only park it if it is still
+        // 'canceling', else we would resurrect a cancelled/removed download.
+        const settled = queue.getById(taskId);
+        if (settled === undefined || settled.state !== 'canceling') {
+          return;
+        }
+        await transition(settled, 'paused');
+      } else {
+        return;
+      }
+      pump();
+    },
+
+    async resume(taskId: string): Promise<void> {
+      const job = queue.getById(taskId);
+      if (job === undefined || job.state !== 'paused') {
+        return;
+      }
+      await transition(job, 'queued');
+      pump();
+    },
+
+    async retry(taskId: string): Promise<void> {
+      const job = queue.getById(taskId);
+      if (job === undefined || job.state !== 'failed') {
+        return;
+      }
+      // NEVER resurrect a job that failed validation or is non-retryable (§6):
+      // DRM/unsupported, HLS/DASH, blob, or invalid URLs. Manual retry() must apply
+      // the same gate as the automatic path (which uses retryPolicy.shouldRetry).
+      if (job.error !== undefined && !job.error.retryable) {
+        return;
+      }
+      if (!validateDownloadable(job.item).ok) {
+        return;
+      }
+      clearRetryTimer(taskId);
+      await transition(job, 'queued', { attempt: 0 });
+      pump();
+    },
+
+    remove(taskId: string): Promise<void> {
+      return removeJob(taskId);
+    },
+
+    getQueue(): Promise<readonly DownloadTask[]> {
+      return queue.all();
+    },
+
+    getTask(taskId: string): DownloadTask | undefined {
+      return queue.getById(taskId);
+    },
+
+    stats(): QueueStats {
+      return queue.stats();
+    },
+
+    pauseQueue(): void {
+      if (!queuePaused) {
+        queuePaused = true;
+        emitter.emit('queue:paused');
+      }
+    },
+
+    resumeQueue(): void {
+      if (queuePaused) {
+        queuePaused = false;
+        emitter.emit('queue:resumed');
+        pump();
+      }
+    },
+
+    async stopQueue(): Promise<void> {
+      queuePaused = true;
+      emitter.emit('queue:paused');
+      for (const task of queue.list()) {
+        if (SCHEDULABLE.has(task.state) && task.state !== 'canceling') {
+          await cancelJob(task.id);
+        }
+      }
+    },
+
+    async clearQueue(): Promise<void> {
+      for (const task of queue.list()) {
+        if (task.state !== 'active' && task.state !== 'preparing' && task.state !== 'canceling') {
+          await removeJob(task.id);
+        }
+      }
+    },
+
+    subscribe(listener: (state: QueueState) => void): Unsubscribe {
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+      };
+    },
+
+    on<K extends keyof DownloadEventMap>(
+      event: K,
+      listener: (...args: DownloadEventMap[K]) => void,
+    ): Unsubscribe {
+      return emitter.on(event, listener);
+    },
+
+    async dispose(): Promise<void> {
+      disposed = true;
+      unsubDownloads();
+      for (const cancel of retryTimers.values()) {
+        cancel();
+      }
+      retryTimers.clear();
+      progress.clear();
+      subscribers.clear();
+      emitter.clear();
+      await Promise.resolve();
+    },
+  };
+}

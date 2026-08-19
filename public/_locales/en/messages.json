@@ -1,0 +1,774 @@
+{
+  "extName": {
+    "message": "AetherDL",
+    "description": "The name of the extension, shown in the toolbar and stores."
+  },
+  "extDescription": {
+    "message": "Fast. Private. Powerful. A modern cross-browser media downloader.",
+    "description": "The short description of the extension."
+  },
+  "commandOpenPopup": {
+    "message": "Open AetherDL",
+    "description": "Description of the keyboard shortcut that opens the popup."
+  },
+  "contextMenuDownload": {
+    "message": "Download with AetherDL: {title}",
+    "description": "Context-menu entry for one detected media item."
+  },
+  "notificationCompletedTitle": {
+    "message": "Download complete",
+    "description": "Notification shown when one download finishes."
+  },
+  "notificationCompletedMessage": {
+    "message": "{filename}",
+    "description": "Body of the download-complete notification."
+  },
+  "notificationFailedTitle": {
+    "message": "Download failed",
+    "description": "Notification shown when a download fails for good."
+  },
+  "notificationFailedMessage": {
+    "message": "{filename}",
+    "description": "Body of the download-failed notification."
+  },
+  "notificationQueueTitle": {
+    "message": "Downloads finished",
+    "description": "Notification summarising a batch of downloads."
+  },
+  "notificationQueueMessage": {
+    "message": "{completed} completed, {failed} failed, {canceled} cancelled",
+    "description": "Body of the batch summary notification."
+  },
+  "popup_brand": {
+    "message": "AetherDL",
+    "description": "Popup: popup.brand"
+  },
+  "popup_searchLabel": {
+    "message": "Search media",
+    "description": "Popup: popup.searchLabel"
+  },
+  "popup_searchPlaceholder": {
+    "message": "Search",
+    "description": "Popup: popup.searchPlaceholder"
+  },
+  "popup_kindLabel": {
+    "message": "Kind",
+    "description": "Popup: popup.kindLabel"
+  },
+  "popup_kind_all": {
+    "message": "All",
+    "description": "Popup: popup.kind.all"
+  },
+  "popup_kind_video": {
+    "message": "Video",
+    "description": "Popup: popup.kind.video"
+  },
+  "popup_kind_audio": {
+    "message": "Audio",
+    "description": "Popup: popup.kind.audio"
+  },
+  "popup_kind_stream": {
+    "message": "Stream",
+    "description": "Popup: popup.kind.stream"
+  },
+  "popup_kind_imageSequence": {
+    "message": "Image sequence",
+    "description": "Popup: popup.kind.imageSequence"
+  },
+  "popup_sortLabel": {
+    "message": "Sort",
+    "description": "Popup: popup.sortLabel"
+  },
+  "popup_sort_score": {
+    "message": "Best match",
+    "description": "Popup: popup.sort.score"
+  },
+  "popup_sort_title": {
+    "message": "Title",
+    "description": "Popup: popup.sort.title"
+  },
+  "popup_sort_sizeBytes": {
+    "message": "Size",
+    "description": "Popup: popup.sort.sizeBytes"
+  },
+  "popup_sort_durationSec": {
+    "message": "Duration",
+    "description": "Popup: popup.sort.durationSec"
+  },
+  "popup_sort_discoveredAt": {
+    "message": "Newest",
+    "description": "Popup: popup.sort.discoveredAt"
+  },
+  "popup_count_one": {
+    "message": "1 item",
+    "description": "Popup: popup.count.one"
+  },
+  "popup_count_other": {
+    "message": "{count} items",
+    "description": "Popup: popup.count.other"
+  },
+  "popup_results_label": {
+    "message": "Detected media",
+    "description": "Popup: popup.results.label"
+  },
+  "popup_selectAll": {
+    "message": "Select all",
+    "description": "Popup: popup.selectAll"
+  },
+  "popup_clearSelection": {
+    "message": "Clear selection",
+    "description": "Popup: popup.clearSelection"
+  },
+  "popup_downloadSelected": {
+    "message": "Download selected",
+    "description": "Popup: popup.downloadSelected"
+  },
+  "popup_loading_title": {
+    "message": "Looking for media",
+    "description": "Popup: popup.loading.title"
+  },
+  "popup_loading_detail": {
+    "message": "Reading what this tab has detected.",
+    "description": "Popup: popup.loading.detail"
+  },
+  "popup_empty_title": {
+    "message": "No media detected",
+    "description": "Popup: popup.empty.title"
+  },
+  "popup_empty_detail": {
+    "message": "Play or open media on this page, then reopen AetherDL.",
+    "description": "Popup: popup.empty.detail"
+  },
+  "popup_noMatches_title": {
+    "message": "No matches",
+    "description": "Popup: popup.noMatches.title"
+  },
+  "popup_noMatches_detail": {
+    "message": "No detected media matches your search or filter.",
+    "description": "Popup: popup.noMatches.detail"
+  },
+  "popup_retry": {
+    "message": "Retry",
+    "description": "Popup: popup.retry"
+  },
+  "card_download": {
+    "message": "Download",
+    "description": "Popup: card.download"
+  },
+  "card_copyLink": {
+    "message": "Copy link",
+    "description": "Popup: card.copyLink"
+  },
+  "card_select": {
+    "message": "Select",
+    "description": "Popup: card.select"
+  },
+  "card_unsupported": {
+    "message": "Unsupported",
+    "description": "Popup: card.unsupported"
+  },
+  "card_estimated": {
+    "message": "estimated",
+    "description": "Popup: card.estimated"
+  },
+  "card_alreadyQueued": {
+    "message": "Already in the download queue.",
+    "description": "Popup: card.alreadyQueued"
+  },
+  "card_progress": {
+    "message": "Download progress",
+    "description": "Popup: card.progress"
+  },
+  "card_field_type": {
+    "message": "Type",
+    "description": "Popup: card.field.type"
+  },
+  "card_field_quality": {
+    "message": "Quality",
+    "description": "Popup: card.field.quality"
+  },
+  "card_field_resolution": {
+    "message": "Resolution",
+    "description": "Popup: card.field.resolution"
+  },
+  "card_field_duration": {
+    "message": "Duration",
+    "description": "Popup: card.field.duration"
+  },
+  "card_field_size": {
+    "message": "Size",
+    "description": "Popup: card.field.size"
+  },
+  "card_field_host": {
+    "message": "Host",
+    "description": "Popup: card.field.host"
+  },
+  "card_field_filename": {
+    "message": "Filename",
+    "description": "Popup: card.field.filename"
+  },
+  "card_field_codec": {
+    "message": "Codec",
+    "description": "Popup: card.field.codec"
+  },
+  "card_field_delivery": {
+    "message": "Delivery",
+    "description": "Popup: card.field.delivery"
+  },
+  "queue_title": {
+    "message": "Queue",
+    "description": "Popup: queue.title"
+  },
+  "queue_show": {
+    "message": "Show queue",
+    "description": "Popup: queue.show"
+  },
+  "queue_hide": {
+    "message": "Hide queue",
+    "description": "Popup: queue.hide"
+  },
+  "queue_empty": {
+    "message": "Nothing queued.",
+    "description": "Popup: queue.empty"
+  },
+  "queue_summary": {
+    "message": "{active} active · {queued} queued",
+    "description": "Popup: queue.summary"
+  },
+  "queue_clear": {
+    "message": "Clear",
+    "description": "Popup: queue.clear"
+  },
+  "queue_clearHint": {
+    "message": "Removes every job except transfers in progress.",
+    "description": "Popup: queue.clearHint"
+  },
+  "queue_cancel": {
+    "message": "Cancel",
+    "description": "Popup: queue.cancel"
+  },
+  "queue_retry": {
+    "message": "Retry",
+    "description": "Popup: queue.retry"
+  },
+  "queue_pause": {
+    "message": "Pause",
+    "description": "Popup: queue.pause"
+  },
+  "queue_resume": {
+    "message": "Resume",
+    "description": "Popup: queue.resume"
+  },
+  "queue_remove": {
+    "message": "Remove",
+    "description": "Popup: queue.remove"
+  },
+  "queue_list_label": {
+    "message": "Download queue",
+    "description": "Popup: queue.list.label"
+  },
+  "task_queued": {
+    "message": "Queued",
+    "description": "Popup: task.queued"
+  },
+  "task_preparing": {
+    "message": "Preparing",
+    "description": "Popup: task.preparing"
+  },
+  "task_active": {
+    "message": "Downloading",
+    "description": "Popup: task.active"
+  },
+  "task_paused": {
+    "message": "Paused",
+    "description": "Popup: task.paused"
+  },
+  "task_retrying": {
+    "message": "Retrying",
+    "description": "Popup: task.retrying"
+  },
+  "task_canceling": {
+    "message": "Cancelling",
+    "description": "Popup: task.canceling"
+  },
+  "task_canceled": {
+    "message": "Cancelled",
+    "description": "Popup: task.canceled"
+  },
+  "task_completed": {
+    "message": "Completed",
+    "description": "Popup: task.completed"
+  },
+  "task_failed": {
+    "message": "Failed",
+    "description": "Popup: task.failed"
+  },
+  "task_removed": {
+    "message": "Removed",
+    "description": "Popup: task.removed"
+  },
+  "error_title": {
+    "message": "Something went wrong",
+    "description": "Popup: error.title"
+  },
+  "error_network": {
+    "message": "Connection problem. Check your network and try again.",
+    "description": "Popup: error.network"
+  },
+  "error_http": {
+    "message": "The server refused the download.",
+    "description": "Popup: error.http"
+  },
+  "error_drm": {
+    "message": "This media is protected and cannot be downloaded.",
+    "description": "Popup: error.drm"
+  },
+  "error_validation": {
+    "message": "That media link cannot be downloaded.",
+    "description": "Popup: error.validation"
+  },
+  "error_storage": {
+    "message": "Could not save the download queue. Try again.",
+    "description": "Popup: error.storage"
+  },
+  "error_permission": {
+    "message": "AetherDL needs the downloads permission to save files.",
+    "description": "Popup: error.permission"
+  },
+  "error_capability": {
+    "message": "Not supported in this browser.",
+    "description": "Popup: error.capability"
+  },
+  "error_internal": {
+    "message": "Something went wrong. Try again.",
+    "description": "Popup: error.internal"
+  },
+  "error_unavailable_title": {
+    "message": "AetherDL is not responding",
+    "description": "Popup: error.unavailable.title"
+  },
+  "error_unavailable_detail": {
+    "message": "The background service did not answer. Try again.",
+    "description": "Popup: error.unavailable.detail"
+  },
+  "error_dismiss": {
+    "message": "Dismiss",
+    "description": "Popup: error.dismiss"
+  },
+  "settings_title": {
+    "message": "AetherDL Settings",
+    "description": "Settings: settings.title"
+  },
+  "settings_loading": {
+    "message": "Loading settings",
+    "description": "Settings: settings.loading"
+  },
+  "settings_saved": {
+    "message": "Saved",
+    "description": "Settings: settings.saved"
+  },
+  "settings_reset": {
+    "message": "Reset all settings",
+    "description": "Settings: settings.reset"
+  },
+  "settings_resetHint": {
+    "message": "Restores every setting to its default.",
+    "description": "Settings: settings.resetHint"
+  },
+  "settings_dismiss": {
+    "message": "Dismiss",
+    "description": "Settings: settings.dismiss"
+  },
+  "settings_section_appearance": {
+    "message": "Appearance",
+    "description": "Settings: settings.section.appearance"
+  },
+  "settings_section_downloads": {
+    "message": "Downloads",
+    "description": "Settings: settings.section.downloads"
+  },
+  "settings_section_detection": {
+    "message": "Detection",
+    "description": "Settings: settings.section.detection"
+  },
+  "settings_section_notifications": {
+    "message": "Notifications",
+    "description": "Settings: settings.section.notifications"
+  },
+  "settings_section_history": {
+    "message": "History",
+    "description": "Settings: settings.section.history"
+  },
+  "settings_section_permissions": {
+    "message": "Permissions",
+    "description": "Settings: settings.section.permissions"
+  },
+  "settings_section_about": {
+    "message": "About",
+    "description": "Settings: settings.section.about"
+  },
+  "settings_theme": {
+    "message": "Theme",
+    "description": "Settings: settings.theme"
+  },
+  "settings_theme_help": {
+    "message": "System follows your browser or operating system.",
+    "description": "Settings: settings.theme.help"
+  },
+  "settings_theme_system": {
+    "message": "System",
+    "description": "Settings: settings.theme.system"
+  },
+  "settings_theme_light": {
+    "message": "Light",
+    "description": "Settings: settings.theme.light"
+  },
+  "settings_theme_dark": {
+    "message": "Dark",
+    "description": "Settings: settings.theme.dark"
+  },
+  "settings_reducedMotion": {
+    "message": "Reduced motion",
+    "description": "Settings: settings.reducedMotion"
+  },
+  "settings_reducedMotion_help": {
+    "message": "Turns off non-essential animation.",
+    "description": "Settings: settings.reducedMotion.help"
+  },
+  "settings_reducedMotion_system": {
+    "message": "System",
+    "description": "Settings: settings.reducedMotion.system"
+  },
+  "settings_reducedMotion_on": {
+    "message": "On",
+    "description": "Settings: settings.reducedMotion.on"
+  },
+  "settings_reducedMotion_off": {
+    "message": "Off",
+    "description": "Settings: settings.reducedMotion.off"
+  },
+  "settings_language": {
+    "message": "Language",
+    "description": "Settings: settings.language"
+  },
+  "settings_language_help": {
+    "message": "System uses your browser language.",
+    "description": "Settings: settings.language.help"
+  },
+  "settings_language_system": {
+    "message": "System",
+    "description": "Settings: settings.language.system"
+  },
+  "settings_language_en": {
+    "message": "English",
+    "description": "Settings: settings.language.en"
+  },
+  "settings_maxConcurrentDownloads": {
+    "message": "Maximum concurrent downloads",
+    "description": "Settings: settings.maxConcurrentDownloads"
+  },
+  "settings_maxConcurrentDownloads_help": {
+    "message": "Between 1 and 10. Applies to new downloads.",
+    "description": "Settings: settings.maxConcurrentDownloads.help"
+  },
+  "settings_maxRetries": {
+    "message": "Maximum retries",
+    "description": "Settings: settings.maxRetries"
+  },
+  "settings_maxRetries_help": {
+    "message": "Between 0 and 10. Only transient failures are retried.",
+    "description": "Settings: settings.maxRetries.help"
+  },
+  "settings_filenameTemplate": {
+    "message": "Filename template",
+    "description": "Settings: settings.filenameTemplate"
+  },
+  "settings_filenameTemplate_help": {
+    "message": "Tokens: {title}, {host}, {ext}, {quality}, {date}, {index}.",
+    "description": "Settings: settings.filenameTemplate.help"
+  },
+  "settings_downloadSubfolder": {
+    "message": "Download subfolder",
+    "description": "Settings: settings.downloadSubfolder"
+  },
+  "settings_downloadSubfolder_help": {
+    "message": "Relative to your Downloads folder. Leave empty for none.",
+    "description": "Settings: settings.downloadSubfolder.help"
+  },
+  "settings_duplicateWarnings": {
+    "message": "Warn about duplicates",
+    "description": "Settings: settings.duplicateWarnings"
+  },
+  "settings_duplicateWarnings_help": {
+    "message": "Flags media that already appears in your history.",
+    "description": "Settings: settings.duplicateWarnings.help"
+  },
+  "settings_detectionSensitivity": {
+    "message": "Detection sensitivity",
+    "description": "Settings: settings.detectionSensitivity"
+  },
+  "settings_detectionSensitivity_help": {
+    "message": "How eagerly AetherDL treats a candidate as media.",
+    "description": "Settings: settings.detectionSensitivity.help"
+  },
+  "settings_detectionSensitivity_conservative": {
+    "message": "Conservative",
+    "description": "Settings: settings.detectionSensitivity.conservative"
+  },
+  "settings_detectionSensitivity_balanced": {
+    "message": "Balanced",
+    "description": "Settings: settings.detectionSensitivity.balanced"
+  },
+  "settings_detectionSensitivity_aggressive": {
+    "message": "Aggressive",
+    "description": "Settings: settings.detectionSensitivity.aggressive"
+  },
+  "settings_notifications": {
+    "message": "Show notifications",
+    "description": "Settings: settings.notifications"
+  },
+  "settings_notifications_help": {
+    "message": "Tells you when a download finishes or fails.",
+    "description": "Settings: settings.notifications.help"
+  },
+  "settings_contextMenu": {
+    "message": "Context menu entries",
+    "description": "Settings: settings.contextMenu"
+  },
+  "settings_contextMenu_help": {
+    "message": "Adds \"Download with AetherDL\" when you right-click media.",
+    "description": "Settings: settings.contextMenu.help"
+  },
+  "settings_keepHistory": {
+    "message": "Keep history",
+    "description": "Settings: settings.keepHistory"
+  },
+  "settings_keepHistory_help": {
+    "message": "History stays on this device and is never sent anywhere.",
+    "description": "Settings: settings.keepHistory.help"
+  },
+  "settings_historyRetention": {
+    "message": "Keep history for",
+    "description": "Settings: settings.historyRetention"
+  },
+  "settings_historyRetention_forever": {
+    "message": "Forever",
+    "description": "Settings: settings.historyRetention.forever"
+  },
+  "settings_historyRetention_30d": {
+    "message": "30 days",
+    "description": "Settings: settings.historyRetention.30d"
+  },
+  "settings_historyRetention_90d": {
+    "message": "90 days",
+    "description": "Settings: settings.historyRetention.90d"
+  },
+  "settings_historyRetention_session": {
+    "message": "This session",
+    "description": "Settings: settings.historyRetention.session"
+  },
+  "permissions_granted": {
+    "message": "Granted",
+    "description": "Settings: permissions.granted"
+  },
+  "permissions_notGranted": {
+    "message": "Not granted",
+    "description": "Settings: permissions.notGranted"
+  },
+  "permissions_grant": {
+    "message": "Grant",
+    "description": "Settings: permissions.grant"
+  },
+  "permissions_revoke": {
+    "message": "Revoke",
+    "description": "Settings: permissions.revoke"
+  },
+  "permissions_notifications": {
+    "message": "Notifications",
+    "description": "Settings: permissions.notifications"
+  },
+  "permissions_notifications_help": {
+    "message": "Needed to show download notifications.",
+    "description": "Settings: permissions.notifications.help"
+  },
+  "permissions_contextMenus": {
+    "message": "Context menu",
+    "description": "Settings: permissions.contextMenus"
+  },
+  "permissions_contextMenus_help": {
+    "message": "Needed to add entries to the right-click menu.",
+    "description": "Settings: permissions.contextMenus.help"
+  },
+  "permissions_denied": {
+    "message": "The browser did not grant that permission.",
+    "description": "Settings: permissions.denied"
+  },
+  "about_version": {
+    "message": "Version",
+    "description": "Settings: about.version"
+  },
+  "about_shortcut": {
+    "message": "Keyboard shortcut",
+    "description": "Settings: about.shortcut"
+  },
+  "about_shortcutHint": {
+    "message": "Opens the AetherDL popup. Rebind it in your browser settings.",
+    "description": "Settings: about.shortcutHint"
+  },
+  "about_privacy": {
+    "message": "AetherDL works entirely on this device. It has no account, no telemetry and makes no network calls of its own.",
+    "description": "Settings: about.privacy"
+  },
+  "history_title": {
+    "message": "Download history",
+    "description": "Settings: history.title"
+  },
+  "history_searchLabel": {
+    "message": "Search history",
+    "description": "Settings: history.searchLabel"
+  },
+  "history_searchPlaceholder": {
+    "message": "Search",
+    "description": "Settings: history.searchPlaceholder"
+  },
+  "history_outcomeLabel": {
+    "message": "Outcome",
+    "description": "Settings: history.outcomeLabel"
+  },
+  "history_outcome_all": {
+    "message": "All",
+    "description": "Settings: history.outcome.all"
+  },
+  "history_outcome_completed": {
+    "message": "Completed",
+    "description": "Settings: history.outcome.completed"
+  },
+  "history_outcome_failed": {
+    "message": "Failed",
+    "description": "Settings: history.outcome.failed"
+  },
+  "history_sortLabel": {
+    "message": "Sort",
+    "description": "Settings: history.sortLabel"
+  },
+  "history_sort_newest": {
+    "message": "Newest",
+    "description": "Settings: history.sort.newest"
+  },
+  "history_sort_oldest": {
+    "message": "Oldest",
+    "description": "Settings: history.sort.oldest"
+  },
+  "history_sort_title": {
+    "message": "Title",
+    "description": "Settings: history.sort.title"
+  },
+  "history_sort_size": {
+    "message": "Size",
+    "description": "Settings: history.sort.size"
+  },
+  "history_count_one": {
+    "message": "1 record",
+    "description": "Settings: history.count.one"
+  },
+  "history_count_other": {
+    "message": "{count} records",
+    "description": "Settings: history.count.other"
+  },
+  "history_empty": {
+    "message": "Nothing downloaded yet.",
+    "description": "Settings: history.empty"
+  },
+  "history_noMatches": {
+    "message": "No records match your search.",
+    "description": "Settings: history.noMatches"
+  },
+  "history_disabled": {
+    "message": "History is off, so nothing is being recorded.",
+    "description": "Settings: history.disabled"
+  },
+  "history_delete": {
+    "message": "Delete",
+    "description": "Settings: history.delete"
+  },
+  "history_clear": {
+    "message": "Clear history",
+    "description": "Settings: history.clear"
+  },
+  "history_clearHint": {
+    "message": "Erases every record from this device.",
+    "description": "Settings: history.clearHint"
+  },
+  "history_export": {
+    "message": "Export history",
+    "description": "Settings: history.export"
+  },
+  "history_exportHint": {
+    "message": "Saves a JSON file to your device.",
+    "description": "Settings: history.exportHint"
+  },
+  "history_exportFilename": {
+    "message": "aetherdl-history.json",
+    "description": "Settings: history.exportFilename"
+  },
+  "history_list_label": {
+    "message": "History records",
+    "description": "Settings: history.list.label"
+  },
+  "history_field_outcome": {
+    "message": "Outcome",
+    "description": "Settings: history.field.outcome"
+  },
+  "history_field_size": {
+    "message": "Size",
+    "description": "Settings: history.field.size"
+  },
+  "history_field_host": {
+    "message": "Host",
+    "description": "Settings: history.field.host"
+  },
+  "history_field_when": {
+    "message": "Downloaded",
+    "description": "Settings: history.field.when"
+  },
+  "history_field_filename": {
+    "message": "Filename",
+    "description": "Settings: history.field.filename"
+  },
+  "settings_error_title": {
+    "message": "Something went wrong",
+    "description": "Settings: settings.error.title"
+  },
+  "settings_error_invalid": {
+    "message": "That value is not allowed. Nothing was saved.",
+    "description": "Settings: settings.error.invalid"
+  },
+  "settings_error_storage": {
+    "message": "Could not save to this device. Try again.",
+    "description": "Settings: settings.error.storage"
+  },
+  "settings_error_permission": {
+    "message": "The browser refused that permission request.",
+    "description": "Settings: settings.error.permission"
+  },
+  "settings_error_capability": {
+    "message": "Not supported in this browser.",
+    "description": "Settings: settings.error.capability"
+  },
+  "settings_error_internal": {
+    "message": "Something went wrong. Try again.",
+    "description": "Settings: settings.error.internal"
+  },
+  "settings_error_unavailable_title": {
+    "message": "AetherDL is not responding",
+    "description": "Settings: settings.error.unavailable.title"
+  },
+  "settings_error_unavailable_detail": {
+    "message": "The background service did not answer. Try again.",
+    "description": "Settings: settings.error.unavailable.detail"
+  },
+  "settings_error_retry": {
+    "message": "Retry",
+    "description": "Settings: settings.error.retry"
+  }
+}

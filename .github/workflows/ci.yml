@@ -1,0 +1,64 @@
+# Continuous Integration (PROJECT_BIBLE.md §18.8; ROADMAP.md Phase 1 deliverable).
+# Runs the full quality gate on every push and pull request to main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint (incl. layer boundaries)
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Unit & integration tests
+        run: npm test
+
+      - name: Performance budgets (§12.1)
+        run: npm run test:perf
+
+      - name: Build (Chromium + Firefox)
+        run: npm run build
+
+      - name: Validate manifests & bundle budgets (§12.1)
+        run: npm run validate:manifest
+
+      - name: Security review gate (§13.10)
+        run: npm run security:gate
+
+      - name: Firefox add-on lint (AMO rules)
+        run: npm run lint:extension
+
+      - name: Package release artifacts (§8.15)
+        run: npm run package
+
+      - name: Install browsers for e2e
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Browser e2e (Chromium + Firefox)
+        run: npm run test:e2e

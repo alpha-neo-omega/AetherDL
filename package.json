@@ -1,0 +1,61 @@
+{
+  "name": "aetherdl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AetherDL \u2014 Fast. Private. Powerful. A modern cross-browser media downloader.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "clean": "tsx build/scripts/clean.ts",
+    "gen:icons": "tsx build/scripts/gen-icons.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
+    "test:e2e": "playwright test",
+    "build:chrome": "tsx build/scripts/build-extension.ts chrome",
+    "build:firefox": "tsx build/scripts/build-extension.ts firefox",
+    "build": "tsx build/scripts/build-extension.ts all",
+    "dev:chrome": "tsx build/scripts/build-extension.ts chrome --watch --mode development",
+    "dev:firefox": "tsx build/scripts/build-extension.ts firefox --watch --mode development",
+    "validate:manifest": "tsx build/scripts/validate.ts",
+    "package": "tsx build/scripts/package.ts",
+    "screenshots": "tsx build/scripts/screenshots.ts",
+    "security:gate": "tsx build/scripts/security-gate.ts",
+    "lint:extension": "web-ext lint --source-dir dist/firefox --output text",
+    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:perf && npm run build && npm run validate:manifest && npm run security:gate && npm run package && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2",
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitest/coverage-v8": "^2.1.4",
+    "axe-core": "^4.13.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-import-resolver-typescript": "^3.6.3",
+    "eslint-plugin-import": "^2.31.0",
+    "jsdom": "^25.0.1",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4",
+    "web-ext": "^10.6.0"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}
