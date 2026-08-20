@@ -458,7 +458,7 @@ Consumers, Lifecycle, Restrictions. Public interface names restate contracts fro
 | `core/download/retry` | Exponential backoff w/ jitter. | retry policy | `manager` | Per task |
 | `core/download/progress` | Progress derivation + throttling. | progress events | `manager`, UI | Per task |
 | `core/download/filename` | Deterministic filename generation. | filename generator | `manager` | Per task |
-| `core/download/stream` | Non-DRM HLS/DASH assembly. | assembler | `manager` | Per stream task |
+| `core/download/stream` | Non-DRM HLS/DASH assembly: playlist/manifest parsing, rendition selection, MPEG-TS and packed-audio demultiplexing, fragmented-MP4 writing and muxing. | assembler, rendition list | `manager` | Per stream task |
 | `core/history` | Local history store & policy. | history repository/service | UI, `download/manager` | Durable |
 | `core/settings` | Settings schema, defaults, validation. | settings service | All surfaces | Durable |
 | `core/query` | Filter/sort/search engine. | query functions | UI | Per query |
@@ -750,10 +750,28 @@ normalized across targets in `platform/downloads`
 
 ### 9.8 Stream Assembly (Non-DRM)
 
-`core/download/stream` parses non-DRM HLS/DASH, selects a variant, fetches segments under bounded
+`core/download/stream` parses non-DRM HLS/DASH, selects a rendition, fetches segments under bounded
 concurrency, and assembles a single output. **Any** encryption/DRM signal aborts assembly and
 reclassifies the item unsupported — no key handling, no decryption, ever
 ([PROJECT_BIBLE.md §10.6](PROJECT_BIBLE.md#106-stream-assembly), [§6](PROJECT_BIBLE.md#6-unsupported-content)).
+
+Which rendition is taken is the **user's** choice — the *Stream quality* setting, or a per-download
+pick listed through `stream/qualities` — and a stream whose audio is a separate track is **joined**
+rather than refused ([ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)). The files
+that do that work:
+
+| File | Role |
+|---|---|
+| `hls.ts`, `dash.ts` | Pure parsers. Encryption is refused here, before any segment is fetched |
+| `quality.ts` | Pure rendition selection: a pinned choice, then the preference, then bandwidth |
+| `ts.ts` | MPEG-TS and HLS packed-audio demultiplexing into elementary samples |
+| `mp4write.ts` | Writes those samples as a fragmented MP4 (`moov`, `moof`/`mdat`, `trun`, `tfdt`) |
+| `mux.ts` | Joins a video-only and an audio-only fragmented MP4 into one file, fragments copied verbatim |
+| `assemble.ts` | Fetches, applies the selection, and composes the above into one output |
+| `deliver.ts` | Composes assembly with the object-URL adapter for whichever context can create one |
+
+Compressed sample data is copied **verbatim** throughout: container work only, no decoding and no
+re-encoding, which is also why none of it can decrypt anything.
 
 ### 9.9 Browser Download API
 

@@ -20,6 +20,8 @@ import { ProgressBar } from './progress-bar';
 export interface MediaCardLabels {
   readonly download: string;
   readonly copyLink: string;
+  /** Action that opens the stream quality chooser (§10.6). */
+  readonly chooseQuality: string;
   readonly select: string;
   readonly unsupported: string;
   readonly estimated: string;
@@ -53,6 +55,12 @@ export interface MediaCardProps {
   readonly onToggleSelected: (itemId: string) => void;
   readonly onDownload: (itemId: string) => void;
   readonly onCopyLink: (item: MediaItem) => void;
+  /**
+   * Open the quality chooser for this item (§10.6). Passed only for media that HAS
+   * qualities to choose between — a stream — so the card never offers a choice it
+   * cannot deliver; a progressive file has exactly one version of itself.
+   */
+  readonly onChooseQuality?: (item: MediaItem) => void;
   readonly labels: MediaCardLabels;
   readonly locale?: string;
 }
@@ -208,6 +216,18 @@ export function MediaCard(props: MediaCardProps): ReactNode {
         >
           {labels.download}
         </Button>
+        {props.onChooseQuality !== undefined && !unsupported && (
+          <Button
+            variant="text"
+            icon="stream"
+            ariaLabel={`${labels.chooseQuality}: ${item.title}`}
+            onClick={() => {
+              props.onChooseQuality?.(item);
+            }}
+          >
+            {labels.chooseQuality}
+          </Button>
+        )}
         <IconButton
           icon="copy"
           label={`${labels.copyLink}: ${item.title}`}

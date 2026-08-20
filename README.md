@@ -24,12 +24,13 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.3.0 — split-track streams, 2026-08-20.** Built on the 1.0.0 stable release: per-tab
-media detection, downloads through the browser's own download manager with a durable queue,
-retry and pause/resume, settings, local history, popup and settings surfaces, and the
-optional context-menu and notification integrations. Then 1.1.0 added stream downloading,
-1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the extension a real icon, and
-1.3.0 makes split-track streams downloadable.
+**1.4.0 — choose the quality; MPEG-TS streams join too, 2026-08-20.** Built on the 1.0.0
+stable release: per-tab media detection, downloads through the browser's own download manager
+with a durable queue, retry and pause/resume, settings, local history, popup and settings
+surfaces, and the optional context-menu and notification integrations. Then 1.1.0 added stream
+downloading, 1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the extension a real
+icon, 1.3.0 joined split-track fragmented-MP4 streams, and 1.4.0 lets the user pick a
+rendition and joins split-track MPEG-TS streams too.
 
 1.1.0 added, at the Project Owner's direction:
 
@@ -66,19 +67,42 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
-### Split-track streams (1.3.0)
+### Choosing a quality (1.4.0)
+
+A stream is not one file — it is the same media at several sizes — and until 1.4.0 the download
+silently took the biggest one. Against real manifests that is a poor default: the DASH-IF-hosted
+Big Buck Bunny ladder tops out at **2160p at ~15 Mbps**, and Apple's advanced example ranks an
+**AC-3** variant highest, so "highest bandwidth" was also choosing an audio codec by accident.
+
+- **A setting** — *Streams → Stream quality*: highest (default), up to 2160p / 1440p / 1080p /
+  720p / 480p, or smallest available. A height is a **ceiling**: the best copy at or below it.
+- **A per-download chooser** — *Quality* on a stream in the popup lists what the manifest actually
+  offers, marks the one the preference would take, and downloads exactly the one clicked. It reads
+  the manifest and nothing else: one small GET, no segment fetched, nothing queued.
+
+### Split-track streams (1.3.0, extended in 1.4.0)
 
 Most real-world DASH — and much HLS — keeps audio and video in separate tracks. 1.1.0
-saved the video alone and produced a **silent video**; 1.2.0 refused it; 1.3.0 joins the
-two into one file with a fragmented-MP4 muxer written here, with no new dependency.
-Sample data is never touched: fragments are copied verbatim, and only track ids and
-fragment sequence numbers are rewritten.
+saved the video alone and produced a **silent video**; 1.2.0 refused it; 1.3.0 joins two
+fragmented-MP4 tracks into one file; **1.4.0 does the half that was still refused**:
+MPEG-TS renditions, and HLS "packed audio" renditions served as bare `.aac` files.
+
+A transport stream is not a track — it is 188-byte packets carrying interleaved elementary
+streams — so it is taken apart and re-packaged: PAT, PMT and PES are read, H.264 access units
+and AAC frames come out, and a fragmented MP4 is written around them. **Compressed sample data
+is copied verbatim** throughout: no decoding, no re-encoding, no new dependency, and nothing
+that could decrypt anything.
 
 It is validated against real media rather than against a theory of the format: `ffmpeg`
-produces separate h264 and aac tracks, the muxer joins them, and `ffprobe` confirms two
-streams and a clean full decode. A committed split-track fixture is then downloaded end to
-end in a real Chromium, which must save exactly the bytes the muxer produces — and those
-bytes are decoded to prove the file plays.
+produces separate h264 and aac tracks (both as fragmented MP4 and as transport streams), the
+code joins them, and `ffprobe` confirms two streams and a clean full decode with the frame
+counts intact. Committed split-track fixtures — one fMP4, one MPEG-TS — are then downloaded end
+to end in a real Chromium, which must save exactly the bytes this code produces. The shipped
+parsers are also pointed at real streams from Apple, Mux, Akamai and the DASH Industry Forum;
+what that run said is recorded in [docs/LIVE_STREAM_CHECK.md](docs/LIVE_STREAM_CHECK.md).
+
+Only **H.264 video and AAC audio** can be joined. A rendition carrying AC-3, E-AC-3, HEVC or MP3
+audio is refused with the stream types named, rather than saved with a missing track.
 
 ### What the defect sweeps fixed
 
@@ -118,22 +142,24 @@ that matter to a user:
   nothing had asked for host access. Every path asks now.
 - **Site access is listed in Settings**, with a Revoke for each granted origin.
 
-Known limitations at 1.3.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
+Known limitations at 1.4.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
 
-- **MPEG-TS streams that keep audio in a separate track cannot be downloaded.** Joining
-  those means demuxing PES and re-packaging elementary streams, which this project does
-  not do; they are refused with a stated reason rather than saved as a silent video.
-  Fragmented-MP4 split-track streams — most real-world DASH — **are** joined, as of
-  1.3.0.
+- **Only H.264 video and AAC audio can be joined.** A split-track stream whose rendition
+  carries AC-3, E-AC-3, HEVC or MP3 audio is refused, with the stream types named, rather
+  than saved with a missing track. An AC-3 track already inside a fragmented-MP4 rendition
+  passes through untouched, because the muxer never looks at sample data.
+- **Two tracks from separate renditions can start up to one frame apart**; within a single
+  transport stream the shared clock is preserved exactly.
 - **Live** streams cannot be downloaded (a live playlist has no end); they are reported as such.
 - A stream is assembled **in memory**, one at a time, refused past 1 GiB, and is **not
-  resumable** — pausing or cancelling discards what was fetched. The joined file is the
-  segments concatenated, with no remuxing: MPEG-TS segments produce a `.ts` file and fMP4
-  segments a `.mp4` file. Players handle these; some editors prefer a remuxed file.
+  resumable** — pausing or cancelling discards what was fetched. A remuxed track is held
+  twice over while it is being taken apart. A single-track MPEG-TS stream is still saved as
+  `.ts` (nothing needs joining); a split-track one becomes `.mp4`.
 - **Firefox 115–127 cannot download streams at all.** Firefox added
   `optional_host_permissions` in 128, and asking for host access at point of use is the only way
   this project will take it. Progressive downloads are unaffected.
-- Only the highest-bandwidth rendition is assembled; there is no quality picker for streams yet.
+- The quality chooser needs the media host granted in order to read the manifest; declining
+  leaves the download available at the preferred quality.
 - Network-request observation is not implemented; detection reads the page's DOM. A site that
   loads its playlist purely through a script (hls.js and friends) may not be detected.
 - DRM-protected media is refused by design and always will be.
@@ -186,6 +212,7 @@ Load either directory via the browser's "load unpacked / temporary add-on" devel
 | `npm test` / `test:watch` / `test:coverage`        | Unit, integration, accessibility & regression tests.                                                                        |
 | `npm run test:perf`                                | Performance budgets, on their own single-fork runner.                                                                       |
 | `npm run test:e2e`                                 | Browser tests: real Chromium install, real Firefox install over Marionette.                                                 |
+| `npm run test:live`                                | Real-world stream conformance against public test streams. Needs the network; **not** part of `npm run ci`.                  |
 | `npm run build` / `build:chrome` / `build:firefox` | Production builds.                                                                                                          |
 | `npm run dev:chrome` / `dev:firefox`               | Development (unminified, watch).                                                                                            |
 | `npm run validate:manifest`                        | Validate generated manifests and bundle budgets.                                                                            |

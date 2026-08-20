@@ -15,7 +15,7 @@
  *          which is what makes verbatim copying safe.
  * Dependencies: shared/result.
  * Public API: MP4_MAX_BOX_DEPTH, Mp4Track, MuxRequest, muxFragmentedMp4,
- *          splitFragmentedMp4, isFragmentedMp4.
+ *          splitFragmentedMp4, trackFromSegments, isFragmentedMp4.
  */
 import { err, ok, type Result } from '@shared/result';
 import { StreamAssemblyError } from '@core/download/errors';
@@ -155,6 +155,26 @@ export function splitFragmentedMp4(bytes: Uint8Array): Mp4Track {
     }
   }
   return { init: concat(initParts), fragments };
+}
+
+/**
+ * Turn fetched segments into a track this module can read.
+ *
+ * Each segment is split on its own rather than concatenating the track first: it
+ * avoids a second full-size copy, and it handles a segment carrying several
+ * fragments — which real packagers do produce.
+ */
+export function trackFromSegments(parts: readonly Uint8Array[]): Mp4Track {
+  const inits: Uint8Array[] = [];
+  const fragments: Uint8Array[] = [];
+  for (const part of parts) {
+    const split = splitFragmentedMp4(part);
+    if (split.init.byteLength > 0) {
+      inits.push(split.init);
+    }
+    fragments.push(...split.fragments);
+  }
+  return { init: concat(inits), fragments };
 }
 
 function concat(parts: readonly Uint8Array[]): Uint8Array {

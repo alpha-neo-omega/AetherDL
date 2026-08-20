@@ -39,7 +39,16 @@ export function streamMessageKeyFor(code: string): string {
   if (code.endsWith('-too-large') || code.endsWith('-too-many')) {
     return 'error.download.stream.tooLarge';
   }
-  if (code.endsWith('-separate-audio')) {
+  if (
+    code.endsWith('-separate-audio') ||
+    // Everything the demuxer, the writer and the muxer can refuse is about the
+    // TRACKS in the stream — a rendition with no readable track, bytes that are not a
+    // transport stream, a missing parameter set. They read as track problems, not as
+    // network problems, on both sides of the offscreen boundary (§20.5).
+    code.startsWith('stream-ts-') ||
+    code.startsWith('stream-mp4-') ||
+    code.startsWith('stream-mux-')
+  ) {
     return 'error.download.stream.tracks';
   }
   if (

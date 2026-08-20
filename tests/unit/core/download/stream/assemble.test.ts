@@ -7,6 +7,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { HttpError, NetworkError } from '@shared/result/errors';
 import type { HttpClient, HttpRequestOptions, HttpResponse } from '@platform/http';
 import {
+  adtsFrame,
+  annexB,
+  AUDIO_PID,
+  join as tsJoin,
+  nal,
+  packets as tsPackets,
+  patPacket,
+  pes,
+  pmtPacket,
+  REAL_PPS,
+  REAL_SPS,
+  STREAM_TYPE_AAC,
+  STREAM_TYPE_H264,
+  VIDEO_PID,
+} from './_ts';
+import {
   bytesOf,
   fragment,
   initSegment,
@@ -18,11 +34,34 @@ import {
 import {
   assembleStream,
   detectStreamKind,
+  listStreamRenditions,
   streamOriginsFor,
   STREAM_MAX_SEGMENT_BYTES,
 } from '@core/download/stream/assemble';
 
 const bytes = (fill: number, length = 4): Uint8Array => new Uint8Array(length).fill(fill);
+
+/** A one-track H.264 transport stream, in the real format (see `_ts.ts`). */
+function videoTransportStream(): Uint8Array {
+  return tsJoin(
+    patPacket(),
+    pmtPacket([{ streamType: STREAM_TYPE_H264, pid: VIDEO_PID }]),
+    tsPackets(
+      VIDEO_PID,
+      pes(tsJoin(annexB(REAL_SPS, REAL_PPS), annexB(nal(5, 24))), { pts: 90_000, dts: 90_000 }),
+    ),
+    tsPackets(VIDEO_PID, pes(annexB(nal(1, 16)), { pts: 93_000, dts: 93_000 }), 4),
+  );
+}
+
+/** A one-track AAC transport stream, in the real format (see `_ts.ts`). */
+function audioTransportStream(): Uint8Array {
+  return tsJoin(
+    patPacket(),
+    pmtPacket([{ streamType: STREAM_TYPE_AAC, pid: AUDIO_PID }]),
+    tsPackets(AUDIO_PID, pes(tsJoin(adtsFrame(), adtsFrame()), { streamId: 0xc0, pts: 90_000 })),
+  );
+}
 
 function stubHttp(
   routes: Readonly<Record<string, string | Uint8Array | Error>>,
@@ -354,18 +393,19 @@ describe('assembleStream: streams whose audio is a separate track (§10.6)', () 
     expect(trackIdsOf(file)).toEqual([1, 2]);
   });
 
-  it('refuses a split-track stream whose renditions are MPEG-TS', async () => {
-    // Joining those would mean demuxing and re-packaging, which this project does not
-    // do — so it is refused with a reason rather than saved as a silent video.
+  it('joins a split-track stream whose renditions are MPEG-TS by demultiplexing them', async () => {
+    // 1.3.0 refused this: the audio is in its own transport-stream rendition, and a
+    // transport stream is not a track — it is packets. Both renditions are taken
+    // apart and re-packaged into one MP4 (§10.6).
     const master = 'https://cdn.test/hls/master.m3u8';
     const http = stubHttp({
       [master]: [
         '#EXTM3U',
         '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
-        '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aac"',
-        'video/720.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=320x240,AUDIO="aac"',
+        'video/240.m3u8',
       ].join('\n'),
-      'https://cdn.test/hls/video/720.m3u8': [
+      'https://cdn.test/hls/video/240.m3u8': [
         '#EXTM3U',
         '#EXTINF:4,',
         'v1.ts',
@@ -377,8 +417,48 @@ describe('assembleStream: streams whose audio is a separate track (§10.6)', () 
         'a1.ts',
         '#EXT-X-ENDLIST',
       ].join('\n'),
-      'https://cdn.test/hls/video/v1.ts': bytesOf(1, 2, 3),
-      'https://cdn.test/hls/audio/a1.ts': bytesOf(4, 5, 6),
+      'https://cdn.test/hls/video/v1.ts': videoTransportStream(),
+      'https://cdn.test/hls/audio/a1.ts': audioTransportStream(),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok, result.ok ? '' : `${result.error.code}: ${result.error.message}`).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // The output is an MP4 carrying both tracks, not a concatenated transport stream.
+    expect(result.value.extension).toBe('mp4');
+    expect(result.value.mimeType).toBe('video/mp4');
+    const joined = joinBytes(...result.value.parts);
+    expect(trackIdsOf(joined)).toStrictEqual([1, 2]);
+    expect(sequencesOf(joined)).toStrictEqual([1, 2]);
+  });
+
+  it('refuses a split-track MPEG-TS stream whose audio rendition carries no readable track', async () => {
+    const master = 'https://cdn.test/hls/master.m3u8';
+    const http = stubHttp({
+      [master]: [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=320x240,AUDIO="aac"',
+        'video/240.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/video/240.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'v1.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/audio/en.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'a1.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/video/v1.ts': videoTransportStream(),
+      // Bytes that are not a transport stream: a server serving the wrong thing.
+      'https://cdn.test/hls/audio/a1.ts': bytes(9, 512),
     });
 
     const result = await assembleStream({ manifestUrl: master, http });
@@ -387,7 +467,7 @@ describe('assembleStream: streams whose audio is a separate track (§10.6)', () 
     if (result.ok) {
       return;
     }
-    expect(result.error.code).toBe('stream-hls-separate-audio');
+    expect(result.error.code).toBe('stream-ts-not-a-stream');
     expect(result.error.messageKey).toBe('error.download.stream.tracks');
     expect(result.error.retryable).toBe(false);
   });
@@ -719,5 +799,275 @@ describe('assembleStream: failure handling', () => {
       return;
     }
     expect(result.value.origins).toEqual(['https://edge-a.test/*', 'https://edge-b.test/*']);
+  });
+});
+
+describe('core/download/stream quality selection (§10.6)', () => {
+  const master = 'https://cdn.test/hls/master.m3u8';
+  /** A three-rung ladder, each rendition serving a segment that names itself. */
+  const ladder = {
+    [master]: [
+      '#EXTM3U',
+      '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360,CODECS="avc1.4d401e"',
+      'low.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS="avc1.4d401f"',
+      'mid.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=3840x2160,CODECS="avc1.640033"',
+      'high.m3u8',
+    ].join('\n'),
+    'https://cdn.test/hls/low.m3u8': ['#EXTM3U', '#EXTINF:4,', 'low.ts', '#EXT-X-ENDLIST'].join(
+      '\n',
+    ),
+    'https://cdn.test/hls/mid.m3u8': ['#EXTM3U', '#EXTINF:4,', 'mid.ts', '#EXT-X-ENDLIST'].join(
+      '\n',
+    ),
+    'https://cdn.test/hls/high.m3u8': ['#EXTM3U', '#EXTINF:4,', 'high.ts', '#EXT-X-ENDLIST'].join(
+      '\n',
+    ),
+    'https://cdn.test/hls/low.ts': bytes(1, 2),
+    'https://cdn.test/hls/mid.ts': bytes(2, 4),
+    'https://cdn.test/hls/high.ts': bytes(3, 8),
+  } as const;
+
+  const fetchedSegment = async (selection?: {
+    readonly preference?: 'highest' | '2160' | '1440' | '1080' | '720' | '480' | 'lowest';
+    readonly renditionId?: string;
+  }): Promise<readonly string[]> => {
+    const seen: string[] = [];
+    const http = stubHttp(ladder, (url) => {
+      if (url.endsWith('.ts')) {
+        seen.push(url);
+      }
+    });
+    const result = await assembleStream({
+      manifestUrl: master,
+      http,
+      ...(selection !== undefined && { selection }),
+    });
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    return seen;
+  };
+
+  it('still takes the highest bandwidth when nothing asks otherwise', async () => {
+    expect(await fetchedSegment()).toStrictEqual(['https://cdn.test/hls/high.ts']);
+  });
+
+  it('applies a height cap to the variant it follows', async () => {
+    expect(await fetchedSegment({ preference: '720' })).toStrictEqual([
+      'https://cdn.test/hls/mid.ts',
+    ]);
+    expect(await fetchedSegment({ preference: '480' })).toStrictEqual([
+      'https://cdn.test/hls/low.ts',
+    ]);
+    expect(await fetchedSegment({ preference: 'lowest' })).toStrictEqual([
+      'https://cdn.test/hls/low.ts',
+    ]);
+  });
+
+  it('downloads the exact variant the user pinned', async () => {
+    expect(
+      await fetchedSegment({ renditionId: 'https://cdn.test/hls/mid.m3u8', preference: 'highest' }),
+    ).toStrictEqual(['https://cdn.test/hls/mid.ts']);
+  });
+
+  it('lists what an HLS master offers, marking what the preference would take', async () => {
+    const http = stubHttp(ladder);
+    const listed = await listStreamRenditions({
+      manifestUrl: master,
+      http,
+      selection: { preference: '720' },
+    });
+
+    expect(listed.ok, listed.ok ? '' : listed.error.message).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    expect(listed.value).toStrictEqual([
+      {
+        id: 'https://cdn.test/hls/low.m3u8',
+        kind: 'video',
+        bandwidth: 400_000,
+        width: 640,
+        height: 360,
+        codecs: 'avc1.4d401e',
+        isPreferred: false,
+      },
+      {
+        id: 'https://cdn.test/hls/mid.m3u8',
+        kind: 'video',
+        bandwidth: 2_500_000,
+        width: 1280,
+        height: 720,
+        codecs: 'avc1.4d401f',
+        isPreferred: true,
+      },
+      {
+        id: 'https://cdn.test/hls/high.m3u8',
+        kind: 'video',
+        bandwidth: 9_000_000,
+        width: 3840,
+        height: 2160,
+        codecs: 'avc1.640033',
+        isPreferred: false,
+      },
+    ]);
+  });
+
+  it('reads only the manifest to list qualities — no segment, no rendition playlist', async () => {
+    const seen: string[] = [];
+    const http = stubHttp(ladder, (url) => {
+      seen.push(url);
+    });
+
+    await listStreamRenditions({ manifestUrl: master, http });
+
+    // The whole point of a chooser is that it costs one small GET (§10.6).
+    expect(seen).toStrictEqual([master]);
+  });
+
+  it('offers no choice for a media playlist, because there is none', async () => {
+    const media = 'https://cdn.test/hls/only.m3u8';
+    const http = stubHttp({
+      [media]: ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXT-X-ENDLIST'].join('\n'),
+    });
+
+    const listed = await listStreamRenditions({ manifestUrl: media, http });
+
+    expect(listed.ok).toBe(true);
+    expect(listed.ok && listed.value).toStrictEqual([]);
+  });
+
+  it('refuses to list an encrypted playlist, with the refusal the download would give', async () => {
+    const encrypted = 'https://cdn.test/hls/drm.m3u8';
+    const http = stubHttp({
+      [encrypted]: [
+        '#EXTM3U',
+        '#EXT-X-KEY:METHOD=AES-128,URI="https://keys.test/k"',
+        '#EXTINF:4,',
+        'a.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+    });
+
+    const listed = await listStreamRenditions({ manifestUrl: encrypted, http });
+
+    expect(listed.ok).toBe(false);
+    if (listed.ok) {
+      return;
+    }
+    expect(listed.error.code).toBe('stream-hls-encrypted');
+    // A key URI must not travel with the refusal (§6).
+    expect(listed.error.message).not.toContain('keys.test');
+  });
+
+  it('applies the cap to the DASH video track and still takes the best audio', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const seen: string[] = [];
+    const http = stubHttp(
+      {
+        [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT4S"><Period duration="PT4S">
+        <AdaptationSet mimeType="video/mp4" contentType="video"><SegmentTemplate initialization="$RepresentationID$-init.m4s" media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="v720" bandwidth="2000000" width="1280" height="720"/>
+          <Representation id="v2160" bandwidth="15000000" width="3840" height="2160"/></AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4" contentType="audio"><SegmentTemplate initialization="$RepresentationID$-init.m4s" media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="a64" bandwidth="64000"/>
+          <Representation id="a128" bandwidth="128000"/></AdaptationSet>
+      </Period></MPD>`,
+        'https://cdn.test/dash/v720-init.m4s': initSegment(1),
+        'https://cdn.test/dash/v720-1.m4s': fragment(1, 1, bytesOf(0x11)),
+        'https://cdn.test/dash/v2160-init.m4s': initSegment(1),
+        'https://cdn.test/dash/v2160-1.m4s': fragment(1, 1, bytesOf(0x13)),
+        'https://cdn.test/dash/a128-init.m4s': initSegment(1),
+        'https://cdn.test/dash/a128-1.m4s': fragment(1, 1, bytesOf(0x21)),
+        'https://cdn.test/dash/a64-init.m4s': initSegment(1),
+        'https://cdn.test/dash/a64-1.m4s': fragment(1, 1, bytesOf(0x22)),
+      },
+      (url) => {
+        if (url.endsWith('.m4s')) {
+          seen.push(url);
+        }
+      },
+    );
+
+    const result = await assembleStream({
+      manifestUrl: mpdUrl,
+      http,
+      selection: { preference: '1080' },
+    });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    // 720 is the tallest at or below 1080; audio is not a quality the user picked, so
+    // it stays at its best.
+    expect(seen.filter((url) => url.includes('v'))).toStrictEqual([
+      'https://cdn.test/dash/v720-init.m4s',
+      'https://cdn.test/dash/v720-1.m4s',
+    ]);
+    expect(seen.filter((url) => url.includes('a1'))).toStrictEqual([
+      'https://cdn.test/dash/a128-init.m4s',
+      'https://cdn.test/dash/a128-1.m4s',
+    ]);
+  });
+
+  it('lists DASH representations with the AdaptationSet in the id, and marks audio as audio', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const http = stubHttp({
+      [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT4S"><Period duration="PT4S">
+        <AdaptationSet mimeType="video/mp4" contentType="video"><SegmentTemplate initialization="i.m4s" media="$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="1" bandwidth="2000000" width="1280" height="720"/></AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4" contentType="audio"><SegmentTemplate initialization="ai.m4s" media="a$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="1" bandwidth="128000"/></AdaptationSet>
+      </Period></MPD>`,
+    });
+
+    const listed = await listStreamRenditions({ manifestUrl: mpdUrl, http });
+
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    // Both representations call themselves "1": the id has to carry the set, or a
+    // pinned choice would be ambiguous.
+    expect(listed.value.map((rendition) => `${rendition.id}/${rendition.kind}`)).toStrictEqual([
+      '0/1/video',
+      '1/1/audio',
+    ]);
+    expect(
+      listed.value.filter((rendition) => rendition.isPreferred).map((r) => r.id),
+    ).toStrictEqual(['0/1']);
+  });
+
+  it('pins a DASH representation by its composed id', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const seen: string[] = [];
+    const http = stubHttp(
+      {
+        [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT4S"><Period duration="PT4S">
+        <AdaptationSet mimeType="video/mp4" contentType="video"><SegmentTemplate initialization="$RepresentationID$-i.m4s" media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="small" bandwidth="500000" width="640" height="360"/>
+          <Representation id="big" bandwidth="5000000" width="1920" height="1080"/></AdaptationSet>
+      </Period></MPD>`,
+        'https://cdn.test/dash/small-i.m4s': bytes(1, 2),
+        'https://cdn.test/dash/small-1.m4s': bytes(2, 2),
+        'https://cdn.test/dash/big-i.m4s': bytes(3, 2),
+        'https://cdn.test/dash/big-1.m4s': bytes(4, 2),
+      },
+      (url) => {
+        if (url.endsWith('.m4s')) {
+          seen.push(url);
+        }
+      },
+    );
+
+    const result = await assembleStream({
+      manifestUrl: mpdUrl,
+      http,
+      selection: { renditionId: '0/small' },
+    });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    expect(seen).toStrictEqual([
+      'https://cdn.test/dash/small-i.m4s',
+      'https://cdn.test/dash/small-1.m4s',
+    ]);
   });
 });

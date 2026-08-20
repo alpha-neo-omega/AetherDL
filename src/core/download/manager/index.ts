@@ -18,6 +18,12 @@ export type { Unsubscribe } from '@shared/utils';
 
 export interface EnqueueOptions {
   readonly priority?: number;
+  /**
+   * Pin a stream rendition for these jobs — the id the user picked from
+   * `stream/qualities` (§10.6). Recorded on the task, so a job that is paused and
+   * resumed, or retried tomorrow, still downloads the quality that was chosen.
+   */
+  readonly streamRenditionId?: string;
 }
 
 export interface QueueState {

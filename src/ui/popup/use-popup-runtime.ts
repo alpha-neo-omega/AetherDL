@@ -9,7 +9,8 @@
  *          update comes back from the runtime (§8.7, §13.2). Progress arrives as
  *          pushed snapshots rather than polling (§12.4, §12.4 performance). Both
  *          subscriptions are released on unmount (§12.7).
- * Public API: PopupStatus, PopupRuntimeData, PopupRuntimeActions, usePopupRuntime.
+ * Public API: PopupStatus, QualityChooser, PopupRuntimeData, PopupRuntimeActions,
+ *          usePopupRuntime.
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { AppError } from '@shared/result';
@@ -18,11 +19,23 @@ import type {
   DownloadProgressSnapshot,
   DownloadTask,
   MediaItem,
+  StreamRenditionSnapshot,
 } from '@shared/types';
 import { toAppError } from './errors';
 import type { PopupRuntimeClient } from './runtime-client';
 
 export type PopupStatus = 'loading' | 'ready' | 'error';
+
+/**
+ * The open quality chooser (§10.6). `loading` while the manifest is being read — one
+ * small GET, but a network round trip all the same, so the surface says so rather
+ * than looking stuck.
+ */
+export interface QualityChooser {
+  readonly item: MediaItem;
+  readonly status: 'loading' | 'ready';
+  readonly renditions: readonly StreamRenditionSnapshot[];
+}
 
 export interface PopupRuntimeData {
   readonly status: PopupStatus;
@@ -32,6 +45,8 @@ export interface PopupRuntimeData {
   readonly error: AppError | undefined;
   /** A recoverable failure shown alongside results (§20.5). */
   readonly notice: AppError | undefined;
+  /** The stream whose qualities the user is choosing from, if any (§10.6). */
+  readonly chooser: QualityChooser | undefined;
 }
 
 export interface PopupRuntimeActions {
@@ -45,6 +60,11 @@ export interface PopupRuntimeActions {
   clearQueue(): void;
   copyLink(item: MediaItem): void;
   dismissNotice(): void;
+  /** Read what this stream offers and open the chooser (§10.6). */
+  chooseQuality(item: MediaItem): void;
+  /** Queue one item at the rendition the user picked. */
+  downloadRendition(itemId: string, renditionId: string): void;
+  closeChooser(): void;
 }
 
 type Action =
@@ -59,7 +79,10 @@ type Action =
   | { readonly type: 'progress'; readonly snapshot: DownloadProgressSnapshot }
   | { readonly type: 'failed'; readonly error: AppError }
   | { readonly type: 'notice'; readonly error: AppError }
-  | { readonly type: 'dismiss' };
+  | { readonly type: 'dismiss' }
+  | { readonly type: 'chooser-open'; readonly item: MediaItem }
+  | { readonly type: 'chooser-ready'; readonly renditions: readonly StreamRenditionSnapshot[] }
+  | { readonly type: 'chooser-close' };
 
 const INITIAL: PopupRuntimeData = {
   status: 'loading',
@@ -67,6 +90,7 @@ const INITIAL: PopupRuntimeData = {
   tasks: [],
   error: undefined,
   notice: undefined,
+  chooser: undefined,
 };
 
 /**
@@ -105,6 +129,7 @@ function reducer(state: PopupRuntimeData, action: Action): PopupRuntimeData {
         tasks: action.tasks,
         error: undefined,
         notice: state.notice,
+        chooser: state.chooser,
       };
     case 'items':
       return { ...state, items: action.items };
@@ -118,6 +143,19 @@ function reducer(state: PopupRuntimeData, action: Action): PopupRuntimeData {
       return { ...state, notice: action.error };
     case 'dismiss':
       return state.notice === undefined ? state : { ...state, notice: undefined };
+    case 'chooser-open':
+      return { ...state, chooser: { item: action.item, status: 'loading', renditions: [] } };
+    case 'chooser-ready':
+      // Only fills the chooser that is still open: the user may have closed it while
+      // the manifest was being read, and re-opening it under them would be wrong.
+      return state.chooser === undefined
+        ? state
+        : {
+            ...state,
+            chooser: { ...state.chooser, status: 'ready', renditions: action.renditions },
+          };
+    case 'chooser-close':
+      return state.chooser === undefined ? state : { ...state, chooser: undefined };
     default:
       return state;
   }
@@ -272,6 +310,44 @@ export function usePopupRuntime(
       },
       dismissNotice: () => {
         dispatch({ type: 'dismiss' });
+      },
+      chooseQuality: (item) => {
+        dispatch({ type: 'chooser-open', item });
+        // Host access first, from the live gesture, exactly as a download does: the
+        // manifest read needs the same grant, so the user is asked once (§13.7).
+        void client
+          .requestStreamAccess([item.url])
+          .then((granted) => {
+            if (!granted) {
+              throw {
+                category: 'permission',
+                code: 'popup-stream-host-denied',
+                messageKey: 'error.permission.host',
+                retryable: true,
+              } satisfies AppError;
+            }
+            return client.listStreamQualities(item.url);
+          })
+          .then(
+            (renditions) => {
+              dispatch({ type: 'chooser-ready', renditions });
+            },
+            (cause: unknown) => {
+              // A stream whose qualities cannot be read is still downloadable at the
+              // preferred quality, so the chooser closes and says why rather than
+              // sitting open with nothing in it.
+              dispatch({ type: 'chooser-close' });
+              dispatch({ type: 'notice', error: toAppError(cause) });
+            },
+          );
+      },
+      downloadRendition: (itemId, renditionId) => {
+        dispatch({ type: 'chooser-close' });
+        // Access was granted when the chooser opened; this call does not re-ask.
+        run(client.enqueue([itemId], renditionId));
+      },
+      closeChooser: () => {
+        dispatch({ type: 'chooser-close' });
       },
     };
   }, [client, refreshQueue]);

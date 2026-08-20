@@ -182,7 +182,14 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
   }
 
   const variants: HlsVariant[] = [];
-  const separateAudioGroups = new Set<string>();
+  // A group is only a SEPARATE audio track when every rendition in it has its own
+  // URI. Apple's own advanced examples declare a group whose default rendition has no
+  // URI — meaning the variants already carry that audio — alongside an alternate
+  // rendition that does. Treating such a group as separate made assembly download a
+  // video-only rendition and mux in the alternate track, which is not the stream the
+  // page was playing. Found against real manifests (§16.9).
+  const groupsWithUri = new Set<string>();
+  const groupsWithoutUri = new Set<string>();
   const audioRenditions: HlsAudioRendition[] = [];
   const segments: HlsSegment[] = [];
   let live = true;
@@ -213,16 +220,20 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
       const attributes = parseAttributes(line.slice(line.indexOf(':') + 1));
       const type = (attributes['TYPE'] ?? '').trim().toUpperCase();
       const group = attributes['GROUP-ID'];
-      if (type === 'AUDIO' && group !== undefined && attributes['URI'] !== undefined) {
-        separateAudioGroups.add(group);
-        const renditionUrl = resolve(attributes['URI'], manifestUrl);
-        if (renditionUrl !== undefined) {
-          audioRenditions.push({
-            group,
-            url: renditionUrl,
-            ...(attributes['NAME'] !== undefined && { name: attributes['NAME'] }),
-            isDefault: (attributes['DEFAULT'] ?? '').trim().toUpperCase() === 'YES',
-          });
+      if (type === 'AUDIO' && group !== undefined) {
+        if (attributes['URI'] === undefined) {
+          groupsWithoutUri.add(group);
+        } else {
+          groupsWithUri.add(group);
+          const renditionUrl = resolve(attributes['URI'], manifestUrl);
+          if (renditionUrl !== undefined) {
+            audioRenditions.push({
+              group,
+              url: renditionUrl,
+              ...(attributes['NAME'] !== undefined && { name: attributes['NAME'] }),
+              isDefault: (attributes['DEFAULT'] ?? '').trim().toUpperCase() === 'YES',
+            });
+          }
         }
       }
       continue;
@@ -310,10 +321,11 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
   }
 
   if (variants.length > 0) {
+    const separateAudioGroups = [...groupsWithUri].filter((group) => !groupsWithoutUri.has(group));
     return {
       kind: 'master',
       variants,
-      separateAudioGroups: [...separateAudioGroups],
+      separateAudioGroups,
       audioRenditions,
     };
   }

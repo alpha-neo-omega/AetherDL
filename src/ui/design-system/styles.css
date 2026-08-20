@@ -749,3 +749,98 @@ body {
   white-space: nowrap;
   font-size: var(--adl-type-body-medium-size);
 }
+
+/* ---- Stream quality chooser (§10.6, §11.6) ---- */
+
+.adl-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--adl-space-lg);
+  background: color-mix(in srgb, var(--adl-color-scrim) 60%, transparent);
+  z-index: 10;
+}
+
+.adl-modal__panel {
+  inline-size: 100%;
+  max-inline-size: 22rem;
+  max-block-size: 100%;
+  overflow-y: auto;
+  padding: var(--adl-space-lg);
+  border-radius: var(--adl-shape-medium);
+  background: var(--adl-color-surface);
+  color: var(--adl-color-on-surface);
+  box-shadow: var(--adl-elevation-level2);
+}
+
+.adl-modal__title {
+  margin: 0;
+  font-size: var(--adl-type-title-medium-size);
+}
+
+.adl-modal__subtitle {
+  margin: var(--adl-space-xs) 0 var(--adl-space-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--adl-type-body-small-size);
+  color: var(--adl-color-on-surface-variant);
+}
+
+.adl-modal__status,
+.adl-modal__note {
+  margin: var(--adl-space-sm) 0 0;
+  font-size: var(--adl-type-body-small-size);
+  color: var(--adl-color-on-surface-variant);
+}
+
+.adl-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adl-space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adl-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-start: var(--adl-space-md);
+}
+
+.adl-quality {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--adl-space-sm);
+  inline-size: 100%;
+  padding: var(--adl-space-sm) var(--adl-space-md);
+  border: 1px solid var(--adl-color-outline-variant);
+  border-radius: var(--adl-shape-small);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.adl-quality:hover {
+  background: var(--adl-color-surface-variant);
+}
+
+.adl-quality:focus-visible {
+  outline: 2px solid var(--adl-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.adl-quality__badge {
+  flex: 0 0 auto;
+  padding: 0 var(--adl-space-xs);
+  border-radius: var(--adl-shape-small);
+  background: var(--adl-color-primary-container);
+  color: var(--adl-color-on-primary-container);
+  font-size: var(--adl-type-label-small-size);
+}

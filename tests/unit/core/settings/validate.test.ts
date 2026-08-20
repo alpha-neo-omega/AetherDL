@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { STREAM_QUALITY_PREFERENCES } from '@shared/constants';
 import { DEFAULT_SETTINGS } from '@core/settings';
 import { coerceSettings, SETTING_LIMITS, validateSettingsPatch } from '@core/settings/validate';
 import type { Settings } from '@shared/types';
@@ -35,6 +36,7 @@ describe('core/settings validation', () => {
       reducedMotion: 'system',
       language: 'system',
       detectionSensitivity: 'balanced',
+      streamQuality: 'highest',
     });
   });
 
@@ -57,6 +59,11 @@ describe('core/settings validation', () => {
         detectionSensitivity: sensitivity,
       });
     }
+    // Driven off the declared list, so a preference added to the vocabulary without a
+    // validator — or validated without being usable — fails here (§10.6).
+    for (const quality of STREAM_QUALITY_PREFERENCES) {
+      expect(accept({ streamQuality: quality })).toEqual({ streamQuality: quality });
+    }
   });
 
   it('rejects a value outside an enumeration', () => {
@@ -66,6 +73,8 @@ describe('core/settings validation', () => {
     expect(rejectCode({ detectionSensitivity: 'wild' })).toBe(
       'settings-invalid-detectionSensitivity',
     );
+    expect(rejectCode({ streamQuality: '4k' })).toBe('settings-invalid-streamQuality');
+    expect(rejectCode({ streamQuality: 1080 })).toBe('settings-invalid-streamQuality');
   });
 
   it('enforces the concurrency and retry ranges', () => {

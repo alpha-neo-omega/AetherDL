@@ -37,9 +37,17 @@ export function createLocalStreamDelivery(
     },
     async assemble(request: StreamDeliveryRequest): Promise<StreamDelivery> {
       const ceiling = request.maxTotalBytes ?? options.maxTotalBytes;
+      // The user's pinned rendition wins over the standing preference; the selection
+      // object is omitted entirely when neither is set, so the assembler keeps its
+      // own default rather than being handed an empty intent (§10.6).
+      const selection = {
+        ...(request.renditionId !== undefined && { renditionId: request.renditionId }),
+        ...(request.preference !== undefined && { preference: request.preference }),
+      };
       const assembled = await assembleStream({
         manifestUrl: request.manifestUrl,
         http: options.http,
+        ...(Object.keys(selection).length > 0 && { selection }),
         ...(request.signal !== undefined && { signal: request.signal }),
         ...(request.onProgress !== undefined && { onProgress: request.onProgress }),
         ...(ceiling !== undefined && { maxTotalBytes: ceiling }),

@@ -17,6 +17,7 @@ import {
   flush,
   render,
   renderAsync,
+  press,
   requireByName,
   requireByNamePrefix,
   selectOption,
@@ -768,6 +769,194 @@ describe('ui/popup PopupApp — delivery is named in words (§19.1)', () => {
     const card = view.container.querySelector('.adl-card__facts');
     expect(card?.textContent).toContain('HLS stream');
     expect(card?.textContent).not.toContain('hls');
+    view.unmount();
+  });
+});
+
+describe('ui/popup PopupApp — the stream quality chooser (§10.6)', () => {
+  const STREAM = 'https://cdn.test/hls/master.m3u8';
+
+  const streamItem = (): MediaItem =>
+    mediaItem({
+      id: 'stream',
+      title: 'Live Show',
+      kind: 'stream',
+      url: STREAM,
+      delivery: 'hls',
+    });
+
+  const ladder = [
+    { id: 'r360', kind: 'video' as const, height: 360, bandwidth: 400_000, isPreferred: false },
+    { id: 'r720', kind: 'video' as const, height: 720, bandwidth: 2_400_000, isPreferred: true },
+    {
+      id: 'r2160',
+      kind: 'video' as const,
+      height: 2160,
+      bandwidth: 15_000_000,
+      isPreferred: false,
+    },
+    { id: 'a128', kind: 'audio' as const, bandwidth: 128_000, isPreferred: false },
+  ];
+
+  it('offers a quality action for a stream and none for a progressive file', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem(), mediaItem({ id: 'clip', title: 'Clip' })]);
+    const view = await mount(fake);
+
+    // A progressive file is one file: a chooser for it could only ever be empty.
+    expect(byName(view.container, 'Quality: Live Show')).toBeDefined();
+    expect(byName(view.container, 'Quality: Clip')).toBeUndefined();
+    view.unmount();
+  });
+
+  it('asks for host access first, then lists what the stream offers', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities(ladder);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    // Order matters: the permission request must ride the live user gesture (§13.7).
+    const accessIndex = fake.calls.indexOf(`requestStreamAccess:${STREAM}`);
+    const listIndex = fake.calls.indexOf(`listStreamQualities:${STREAM}`);
+    expect(accessIndex).toBeGreaterThanOrEqual(0);
+    expect(listIndex).toBeGreaterThan(accessIndex);
+
+    // Video renditions are choices; the audio track is stated, not offered.
+    expect(texts(view.container, '.adl-quality__label')).toStrictEqual([
+      '360p · 400 kbps',
+      '720p · 2.4 Mbps',
+      '2160p · 15.0 Mbps',
+    ]);
+    expect(texts(view.container, '.adl-quality__badge')).toStrictEqual(['Preferred']);
+    expect(texts(view.container, '.adl-modal__note')).toStrictEqual(['Audio track: 128 kbps']);
+    view.unmount();
+  });
+
+  it('queues the exact rendition the user picked, and closes', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities(ladder);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+    const first = view.container.querySelector('.adl-quality');
+    expect(first).not.toBeNull();
+    click(first as Element);
+    await flush();
+
+    expect(fake.calls).toContain('enqueue:stream@r360');
+    // No second permission prompt: access was granted when the chooser opened.
+    expect(fake.calls.filter((call) => call.startsWith('requestStreamAccess')).length).toBe(1);
+    expect(view.container.querySelector('.adl-modal')).toBeNull();
+    view.unmount();
+  });
+
+  it('shows that it is reading the stream before the answer arrives', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities(ladder);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    // No flush: this is the state between the click and the answer.
+    expect(texts(view.container, '.adl-modal__status')).toStrictEqual(['Reading the stream…']);
+    await flush();
+    view.unmount();
+  });
+
+  it('says so when a stream has only one quality', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities([]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    expect(texts(view.container, '.adl-modal__status')).toStrictEqual([
+      'This stream offers only one quality.',
+    ]);
+    view.unmount();
+  });
+
+  it('closes and reports when the manifest cannot be read', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.failNext(
+      'listStreamQualities',
+      new MessagingError('no answer', {
+        code: 'messaging-no-answer',
+        messageKey: 'error.messaging',
+      }),
+    );
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    // A stream whose qualities cannot be listed is still downloadable at the
+    // preferred quality, so the chooser gets out of the way and says why.
+    expect(view.container.querySelector('.adl-modal')).toBeNull();
+    expect(byName(view.container, 'Dismiss')).toBeDefined();
+    view.unmount();
+  });
+
+  it('does not read the manifest when the host is declined', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamAccess(false);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    expect(fake.calls).not.toContain(`listStreamQualities:${STREAM}`);
+    expect(view.container.querySelector('.adl-modal')).toBeNull();
+    view.unmount();
+  });
+
+  it('closes on Escape and on Cancel, queueing nothing', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities(ladder);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+    click(requireByName(view.container, 'Cancel'));
+    await flush();
+    expect(view.container.querySelector('.adl-modal')).toBeNull();
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+    const panel = view.container.querySelector('.adl-modal__panel');
+    expect(panel).not.toBeNull();
+    press(panel as Element, 'Escape');
+    await flush();
+
+    expect(view.container.querySelector('.adl-modal')).toBeNull();
+    expect(fake.calls.some((call) => call.startsWith('enqueue'))).toBe(false);
+    view.unmount();
+  });
+
+  it('labels the dialog and moves focus into it (§17.2)', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([streamItem()]);
+    fake.setStreamQualities(ladder);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    const panel = view.container.querySelector('.adl-modal__panel');
+    expect(panel?.getAttribute('role')).toBe('dialog');
+    expect(panel?.getAttribute('aria-modal')).toBe('true');
+    expect(panel?.getAttribute('aria-labelledby')).toBe('adl-quality-title');
+    expect(document.activeElement?.className).toContain('adl-quality');
     view.unmount();
   });
 });

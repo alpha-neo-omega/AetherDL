@@ -29,7 +29,7 @@
 | **Tagline** | Fast. Private. Powerful. |
 | **Classification** | Internal Engineering Handbook — Authoritative |
 | **Status** | Ratified / Active |
-| **Version** | 1.1.0 |
+| **Version** | 1.2.0 |
 | **Stability** | **STATIC** — architecture is frozen; changes require Project Owner approval |
 | **Owner** | Project Owner (AetherDL) |
 | **Audience** | Engineers, Reviewers, AI Implementation Agents, Maintainers, QA, Security |
@@ -40,6 +40,7 @@
 | Version | Date | ADR | What changed |
 |---|---|---|---|
 | 1.0.0 | 2026-08-19 | — | Initial ratified edition |
+| 1.2.0 | 2026-08-20 | [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md) | Stream rendition selection and container work on stream tracks. §4.9 amended: a *Stream quality* setting is added to the catalogue. §8.5 amended: `stream/qualities` added to the message contract. §10.6 amended: the recorded limits "no remuxing" and "highest bandwidth only" are replaced by what the code does — fragmented-MP4 muxing (shipped in product 1.3.0 and recorded here), MPEG-TS and packed-audio demultiplexing, and user-chosen renditions. §16 amended: §16.9 records the real-world conformance suite. §14.1, §25.3 and the DRM boundary are untouched: encryption is still refused before any segment is fetched, no key is ever read, and no decryption exists. Owner-approved 2026-08-20 |
 | 1.1.0 | 2026-08-20 | [ADR-010](docs/adr/010-non-drm-stream-assembly.md) | Non-DRM HLS/DASH stream assembly implemented. §14.3 amended: the extension now performs the read requests a stream download requires, and still transmits nothing. Also amended: §2.6 (metric restated), §5.1 (containers added), §7.4 (assembly context per engine), §10.6 (implemented limits recorded), §12.1 (assembly-document budget), §13.3 (`offscreen`; host-permission declaration), §22.11 acceptance wording, §24 (ADR-010 listed). §14.1 and §25.3 are untouched: no analytics, telemetry, tracking, data collection, cloud, backend, accounts or identifiers, and the DRM boundary, all remain permanent and unchanged. Owner-approved 2026-08-20 |
 
 ### Amendment Policy
@@ -494,6 +495,7 @@ It **MUST** be usable entirely by keyboard ([§17](#17-accessibility)).
 | Reduced motion | `system` \| `on` \| `off` | `system` | Respect motion preferences ([§17](#17-accessibility)) |
 | Language | locale code | `system` | UI language ([§19](#19-internationalization--localization)) |
 | Detection sensitivity | `conservative` \| `balanced` \| `aggressive` | `balanced` | Detector thresholds ([§9](#9-detection-system)) |
+| Stream quality | `highest` \| `2160` \| `1440` \| `1080` \| `720` \| `480` \| `lowest` | `highest` | Which rendition of a multi-quality stream to take ([§10.6](#106-stream-assembly)). A height is a ceiling: the best copy at or below it. Bible 1.2.0, [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md) |
 
 **Constraints.** Every setting **MUST** have a sane, privacy-preserving default. Settings
 **MUST** validate input and reject invalid values with clear feedback. There is **no**
@@ -1141,6 +1143,7 @@ messaging bus in `platform/messaging/`.
 | `settings/*` | popup/settings ↔ background/core | Read/update settings |
 | `history/*` | popup/history ↔ core | Query/mutate history |
 | `badge/*` | background internal | Per-tab badge updates |
+| `stream/*` | popup → background; background ↔ assembly host | Assemble a non-DRM stream, abort or release one, and list the renditions a stream offers so the user can choose (`stream/qualities`, Bible 1.2.0, [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)). Reads a manifest only; no segment is fetched by a listing |
 
 ### 8.6 Data Flow
 
@@ -1742,8 +1745,10 @@ For **non-DRM** HLS/DASH ([§5.5](#55-progressive-streams--adaptive-manifests)):
 | Live streams | **Not downloadable** — a live playlist has no end. Reported as live, not attempted |
 | Resumability | **Not implemented.** §10.6 says "resumable where feasible"; it is not feasible for an in-memory assembly and is not claimed. Assembly is cancelable, which is required |
 | Memory | Assembled in memory, refused past **1 GiB**; per-segment ceiling 64 MiB |
-| Remuxing | **None.** MPEG-TS segments concatenate to `.ts`, fMP4 segments to `.mp4` |
-| Rendition | Highest bandwidth only; no per-stream quality picker yet ([§9.8](#98-quality-detection) applies to detection) |
+| Container work | **Permitted, and narrowly defined** (Bible 1.2.0, [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)): assembly may demultiplex MPEG-TS and HLS packed audio, and may write fragmented MP4, in order to join the tracks of ONE stream into one file. Compressed sample data is copied **verbatim** — no decoding, no re-encoding, no transcoding, and therefore no decryption ([§6](#6-unsupported-content)). A single-track MPEG-TS stream still concatenates to `.ts`; a split-track one is joined into `.mp4` |
+| Codecs that can be joined | H.264 video and AAC audio. A rendition carrying anything else (AC-3, E-AC-3, HEVC, MP3) is **refused with the stream types named**, never saved as a silent video |
+| Rendition | The **user's choice**: the *Stream quality* setting ([§4.9](#49-settings)), or a per-download pick from the renditions a manifest declares, read through `stream/qualities` ([§8.5](#85-communication-rules)). Default `highest`. A height cap that excludes every rendition takes the smallest rather than refusing |
+| Track alignment | Two tracks from ONE transport stream keep their shared clock exactly. Two tracks from SEPARATE renditions each start at their own first sample, so their relative start can differ by up to one frame |
 | Segment fetching | Sequential (bounded concurrency of one): playlist order is file order, and peak memory stays one segment plus what is kept |
 | Firefox 115–127 | Streams **cannot** be downloaded there: `optional_host_permissions` requires Firefox 128, and taking host access at install instead is forbidden ([§13.3](#133-permission-strategy)). Degrades gracefully per [§7.4](#74-firefox-compatibility); progressive downloads are unaffected |
 
@@ -2379,6 +2384,25 @@ requires. Tests never call external networks or services ([§14](#14-privacy)).
 - Arrange-Act-Assert; one behavior per test; descriptive names.
 - No network, no real timers (fake timers), no reliance on machine locale/timezone.
 
+### 16.9 Real-World Stream Conformance
+
+**Location:** `tests/live/`, run by hand with `npm run test:live`. Added in Bible 1.2.0
+([ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)).
+
+Format code can only be proven against media it did not create. This suite points the **shipped**
+parsers, selection logic and muxer at streams published by Apple, Mux, Akamai and the DASH
+Industry Forum for testing, and has `ffprobe` judge what comes out.
+
+- It is **NOT** part of `npm run ci` and **MUST NOT** be added to it: it needs the network, so it
+  can fail for reasons that say nothing about this code, and a gate must be a statement about the
+  code ([§18.8](#188-cicd)).
+- It reads a manifest and a short **prefix** of each track — enough to decode — not whole streams.
+- It drives the same entry points a download does (`planStream`, `listStreamRenditions`, the
+  muxer), never a copy of that logic, so a passing run means the shipped path works.
+- Results are recorded in [`docs/LIVE_STREAM_CHECK.md`](docs/LIVE_STREAM_CHECK.md), with the date
+  and the version they were executed against, because a claim about real streams is only as good
+  as the last time someone ran it.
+
 ---
 
 ## 17. Accessibility
@@ -2965,6 +2989,24 @@ Owner Approval: <required for Accepted>
 - **Consequences:** Streams are downloadable on both engines; the privacy claim is narrower and
   mechanically enforced. Costs: no live streams, no resumability, in-memory 1 GiB ceiling, no
   remuxing, and no stream downloads on Firefox 115–127.
+
+### ADR-011: Stream Rendition Selection, and Container Work on Stream Tracks
+
+- **Status:** Accepted. Owner approval 2026-08-20.
+- **Full record:** [`docs/adr/011-stream-rendition-selection-and-remuxing.md`](docs/adr/011-stream-rendition-selection-and-remuxing.md).
+- **Context:** [ADR-010](docs/adr/010-non-drm-stream-assembly.md) recorded two limits that the code
+  then ran into: "no remuxing", which refused every stream whose audio is a separate track, and
+  "highest bandwidth only", which against real manifests means a 4K, 15 Mbps copy of a clip the
+  user wanted at 720p.
+- **Decision:** Let the user choose the rendition — a settings preference plus a per-download
+  chooser that reads only the manifest — and permit container work on stream tracks: demultiplex
+  MPEG-TS and packed audio, write fragmented MP4, and join the tracks of one stream into one file,
+  copying compressed sample data verbatim. No decoding, no re-encoding, no new dependency, and no
+  change whatsoever to the DRM boundary.
+- **Consequences:** Most real-world split-track streams download as one file, and a user can take
+  a smaller copy. The cost is that this project owns three format implementations, mitigated by
+  validating them against real media (ffmpeg/ffprobe, a committed fixture downloaded in a real
+  browser) and against real packagers ([§16.9](#169-real-world-stream-conformance)).
 
 ---
 

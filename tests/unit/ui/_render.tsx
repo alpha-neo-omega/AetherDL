@@ -104,6 +104,13 @@ export function click(element: Element): void {
   });
 }
 
+/** Press a key on an element, as a keyboard user would (§17.2). */
+export function press(element: Element, key: string): void {
+  act(() => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+}
+
 /** Set a text input's value the way a user would, defeating React's value tracker. */
 export function type(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;

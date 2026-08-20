@@ -18,7 +18,13 @@ import {
   SETTINGS_CHANGED_CHANNEL,
 } from '@shared/constants';
 import { RuntimeError } from '@shared/result/errors';
-import type { DownloadEventBroadcast, DownloadTask, MediaItem, Settings } from '@shared/types';
+import type {
+  DownloadEventBroadcast,
+  DownloadTask,
+  MediaItem,
+  Settings,
+  StreamRenditionSnapshot,
+} from '@shared/types';
 import { manifestTypeFromUrl, parseUrl, type Unsubscribe } from '@shared/utils';
 import type { PopupRuntimeClient } from '@ui/popup';
 
@@ -79,8 +85,15 @@ export function createPopupRuntimeClient(browser: Browser): PopupRuntimeClient {
       return bus.send('download/query', undefined);
     },
 
-    enqueue(itemIds: readonly string[]): Promise<void> {
-      return bus.send('download/enqueue', { itemIds });
+    enqueue(itemIds: readonly string[], renditionId?: string): Promise<void> {
+      return bus.send('download/enqueue', {
+        itemIds,
+        ...(renditionId !== undefined && { renditionId }),
+      });
+    },
+
+    listStreamQualities(manifestUrl: string): Promise<readonly StreamRenditionSnapshot[]> {
+      return bus.send('stream/qualities', { manifestUrl });
     },
 
     /**

@@ -17,7 +17,7 @@ import { SettingsApp } from '@ui/settings';
 import type { MediaItem } from '@shared/types';
 import { createFakeRuntimeClient, downloadTask, mediaItem } from '../unit/ui/_fixtures';
 import { createFakeSettingsClient, historyRecord } from '../unit/ui/settings/_fixtures';
-import { flush, render, type as typeInto } from '../unit/ui/_render';
+import { click, flush, render, requireByName, type as typeInto } from '../unit/ui/_render';
 
 const NO_MEDIA_QUERIES: MediaPreferences = {
   matches: () => false,
@@ -71,6 +71,34 @@ describe('accessibility: popup surface (§16.6, §17)', () => {
     const view = render(<PopupApp client={fake.client} media={NO_MEDIA_QUERIES} locale="en-US" />);
     await flush();
 
+    await expectNoViolations(view.container);
+    view.unmount();
+  });
+
+  it('has no violations with the stream quality chooser open (§10.6)', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([
+      mediaItem({
+        id: 'stream',
+        title: 'Live Show',
+        kind: 'stream',
+        url: 'https://cdn.test/hls/master.m3u8',
+        delivery: 'hls',
+      }),
+    ]);
+    fake.setStreamQualities([
+      { id: 'r360', kind: 'video', height: 360, bandwidth: 400_000, isPreferred: false },
+      { id: 'r1080', kind: 'video', height: 1080, bandwidth: 6_000_000, isPreferred: true },
+      { id: 'a128', kind: 'audio', bandwidth: 128_000, isPreferred: false },
+    ]);
+
+    const view = render(<PopupApp client={fake.client} media={NO_MEDIA_QUERIES} locale="en-US" />);
+    await flush();
+    // A modal is the surface most likely to be inaccessible, so it is audited open.
+    click(requireByName(view.container, 'Quality: Live Show'));
+    await flush();
+
+    expect(view.container.querySelector('.adl-modal__panel')).not.toBeNull();
     await expectNoViolations(view.container);
     view.unmount();
   });

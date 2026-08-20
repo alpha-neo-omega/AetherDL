@@ -78,6 +78,51 @@ describe('HLS: separate audio renditions', () => {
     expect(result.separateAudioGroups).toEqual([]);
   });
 
+  it('does not flag a group whose default rendition has no URI, however many alternates do', () => {
+    // Apple's own advanced example is shaped exactly like this: the default audio is
+    // inside the variants, and a SECOND rendition of the same group offers an
+    // alternative track. Reading that as "the variant has no audio" made assembly
+    // download a video-only rendition and mux in the alternate track — a different
+    // stream from the one the page plays. Found against real manifests (§16.9).
+    const text = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="bipbop_audio",NAME="Audio 1",DEFAULT=YES',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="bipbop_audio",NAME="Audio 2",DEFAULT=NO,URI="alt/aac.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="bipbop_audio"',
+      'v.m3u8',
+    ].join('\n');
+
+    const result = parseHlsPlaylist(text, BASE);
+
+    expect(result.kind).toBe('master');
+    if (result.kind !== 'master') {
+      return;
+    }
+    expect(result.separateAudioGroups).toEqual([]);
+    // The alternate rendition is still reported: it exists, and a caller may want to
+    // know about it. What changed is that it no longer implies a split track.
+    expect(result.audioRenditions.map((rendition) => rendition.name)).toEqual(['Audio 2']);
+  });
+
+  it('flags a group only when every rendition in it has its own URI', () => {
+    const text = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="split",NAME="English",DEFAULT=YES,URI="a/en.m3u8"',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="split",NAME="German",DEFAULT=NO,URI="a/de.m3u8"',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="muxed",NAME="English",DEFAULT=YES',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="split"',
+      'v.m3u8',
+    ].join('\n');
+
+    const result = parseHlsPlaylist(text, BASE);
+
+    expect(result.kind).toBe('master');
+    if (result.kind !== 'master') {
+      return;
+    }
+    expect(result.separateAudioGroups).toEqual(['split']);
+  });
+
   it('ignores subtitle and closed-caption renditions entirely', () => {
     const text = [
       '#EXTM3U',

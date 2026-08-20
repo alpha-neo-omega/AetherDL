@@ -18,12 +18,14 @@
  *          createBackgroundDownloadRuntime.
  */
 import type { Browser } from '@platform/browser';
+import type { HttpClient } from '@platform/http';
 import type { StreamDeliveryAdapter } from '@platform/stream';
 import type { ObjectStore } from '@platform/storage';
 import { createQueueRepository } from '@core/storage/queue-repository';
 import { DownloadValidationError, PermissionDeniedError } from '@core/download/errors';
 import { createDownloadSystem, type ConfigurableDownloadManager } from '@core/download/factory';
 import { resolveStreamDelivery } from '@runtime/background/stream';
+import { listStreamRenditions, streamOriginsFor } from '@core/download/stream/assemble';
 import type { QueueCompleted, RetryScheduled } from '@core/download/manager';
 import { createDownloadQueue } from '@core/download/queue/queue';
 import type { DownloadQueue, QueueStats } from '@core/download/queue';
@@ -38,6 +40,7 @@ import type {
   DownloadTask,
   Settings,
   MediaItem,
+  StreamRenditionSnapshot,
   TaskState,
 } from '@shared/types';
 import { parseUrl, TypedEventEmitter, type Unsubscribe } from '@shared/utils';
@@ -58,6 +61,16 @@ export { DOWNLOAD_EVENT_CHANNEL } from '@shared/constants';
 
 /** The install-time permission every transfer depends on (§13.3). */
 const DOWNLOADS_PERMISSION = 'downloads';
+
+/**
+ * A rendition id is a manifest's own identifier — an HLS variant URL, a DASH
+ * representation id. This bounds what a caller can persist onto a task; a longer one
+ * could not match anything a parser produced anyway.
+ */
+const MAX_RENDITION_ID_LENGTH = 2048;
+
+/** Same reasoning as a rendition id: bounded before it is used or reported. */
+const MAX_MANIFEST_URL_LENGTH = 2048;
 
 /** Jobs whose transfer has not settled — the set `download/progress` reports. */
 const IN_FLIGHT_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
@@ -152,7 +165,7 @@ export interface BackgroundDownloadRuntime {
    * the manager's validation. Phase 7 additive, for the context-menu integration
    * (§4.13); no existing member changed.
    */
-  enqueue(itemIds: readonly string[]): Promise<void>;
+  enqueue(itemIds: readonly string[], streamRenditionId?: string): Promise<void>;
   /** Resolves once the durable queue is reconstructed and scheduling is live. */
   ready(): Promise<void>;
   /**
@@ -197,6 +210,14 @@ export interface BackgroundDownloadRuntimeDeps {
    * stream items refused exactly as a build without it.
    */
   readonly streamDelivery?: StreamDeliveryAdapter | null;
+  /**
+   * Reads manifests for the quality chooser (§10.6). This is the ONLY thing this
+   * runtime uses the network for: one GET of a playlist or manifest, no segment, so
+   * the user can be shown what a stream actually offers before anything is queued.
+   * Omitted, `stream/qualities` reports that listing is unavailable rather than
+   * pretending a stream has one quality.
+   */
+  readonly http?: HttpClient;
   readonly clock?: () => number;
   readonly generateId?: () => string;
   readonly random?: () => number;
@@ -216,6 +237,17 @@ function extractTaskId(request: unknown): string | undefined {
   return typeof taskId === 'string' && taskId !== '' ? taskId : undefined;
 }
 
+/** Extract a usable manifest URL from an untrusted payload (§13.8). */
+function extractManifestUrl(request: unknown): string | undefined {
+  if (!isRecord(request)) {
+    return undefined;
+  }
+  const url = request['manifestUrl'];
+  return typeof url === 'string' && url !== '' && url.length <= MAX_MANIFEST_URL_LENGTH
+    ? url
+    : undefined;
+}
+
 /** Extract deduplicated, non-empty item ids from an untrusted payload (§13.8). */
 function extractItemIds(request: unknown): readonly string[] | undefined {
   if (!isRecord(request)) {
@@ -226,6 +258,23 @@ function extractItemIds(request: unknown): readonly string[] | undefined {
     return undefined;
   }
   return [...new Set(raw.filter((id): id is string => typeof id === 'string' && id !== ''))];
+}
+
+/**
+ * Extract a pinned stream rendition id from an untrusted payload (§13.8).
+ *
+ * Bounded and opaque: it is compared against ids the manifest itself declares, so a
+ * value that means nothing simply selects nothing, but a caller must not be able to
+ * park an unbounded string on a persisted task either.
+ */
+function extractRenditionId(request: unknown): string | undefined {
+  if (!isRecord(request)) {
+    return undefined;
+  }
+  const raw = request['renditionId'];
+  return typeof raw === 'string' && raw !== '' && raw.length <= MAX_RENDITION_ID_LENGTH
+    ? raw
+    : undefined;
 }
 
 /** Compact wire view of a job's transfer progress (§10.5). */
@@ -326,6 +375,7 @@ export function createBackgroundDownloadRuntime(
       maxRetries: settings.maxRetries,
       filenameTemplate: settings.filenameTemplate,
       downloadSubfolder: settings.downloadSubfolder,
+      streamQuality: settings.streamQuality,
     });
   };
 
@@ -466,7 +516,10 @@ export function createBackgroundDownloadRuntime(
     return items.filter((item) => !refused.has(item));
   };
 
-  const enqueueItems = async (itemIds: readonly string[]): Promise<void> => {
+  const enqueueItems = async (
+    itemIds: readonly string[],
+    streamRenditionId?: string,
+  ): Promise<void> => {
     await ensureReady();
     if (!(await hasDownloadPermission())) {
       publishError(
@@ -502,7 +555,70 @@ export function createBackgroundDownloadRuntime(
     }
     // Validation, queueing, scheduling, retry and history all happen inside the
     // existing manager; the runtime only supplies the resolved items (§10.1).
-    await manager.enqueue(downloadable);
+    await manager.enqueue(
+      downloadable,
+      streamRenditionId !== undefined ? { streamRenditionId } : undefined,
+    );
+  };
+
+  /**
+   * Answer the quality chooser.
+   *
+   * Deliberately narrow: read the manifest, report what it lists, queue nothing. The
+   * host permission is requested here because this reads from the media host — the
+   * same grant the download itself needs, asked for at the same point of use, so a
+   * user who picks a quality is not asked twice (§13.7).
+   */
+  const listRenditions = async (request: unknown): Promise<readonly StreamRenditionSnapshot[]> => {
+    const manifestUrl = extractManifestUrl(request);
+    if (manifestUrl === undefined) {
+      throw new DownloadValidationError('A quality request needs a manifest URL', {
+        code: 'stream-qualities-invalid',
+        messageKey: 'error.download.validation',
+      });
+    }
+    const http = deps.http;
+    if (http === undefined) {
+      throw new DownloadValidationError('This build cannot read stream manifests', {
+        code: 'stream-qualities-unsupported',
+        messageKey: 'error.download.stream',
+      });
+    }
+    for (const origin of streamOriginsFor(manifestUrl)) {
+      let granted = false;
+      try {
+        granted =
+          (await browser.permissions.containsHosts([origin])) ||
+          (await browser.permissions.requestHosts([origin]));
+      } catch (cause) {
+        emitError('stream-qualities-host-request-failed', cause);
+        granted = false;
+      }
+      if (!granted) {
+        throw new PermissionDeniedError('Access to the media host was not granted', {
+          code: 'stream-qualities-host-denied',
+          messageKey: 'error.permission.host',
+          context: { origin },
+        });
+      }
+    }
+    // The preference decides which entry is marked as the one that would be taken, so
+    // the chooser opens on the same answer a plain download would have given.
+    let preference: Settings['streamQuality'] | undefined;
+    try {
+      preference = (await deps.getSettings?.())?.streamQuality;
+    } catch (cause) {
+      emitError('stream-qualities-settings-read-failed', cause);
+    }
+    const listed = await listStreamRenditions({
+      manifestUrl,
+      http,
+      ...(preference !== undefined && { selection: { preference } }),
+    });
+    if (!listed.ok) {
+      throw listed.error;
+    }
+    return listed.value;
   };
 
   const forwardManagerEvents = (): void => {
@@ -599,8 +715,12 @@ export function createBackgroundDownloadRuntime(
         if (itemIds === undefined || itemIds.length === 0) {
           return;
         }
-        await run(() => enqueueItems(itemIds));
+        await run(() => enqueueItems(itemIds, extractRenditionId(request)));
       }),
+      // Surface → background: what qualities does this stream offer (§10.6)? One GET
+      // of the manifest, gated by the same point-of-use host permission a download
+      // asks for (§13.7); no segment is fetched and nothing is queued.
+      bus.on('stream/qualities', (request) => listRenditions(request)),
       bus.on('download/cancel', (request) => command(request, (id) => manager.cancel(id))),
       bus.on('download/retry', (request) => command(request, (id) => manager.retry(id))),
       bus.on('download/pause', (request) => command(request, (id) => manager.pause(id))),

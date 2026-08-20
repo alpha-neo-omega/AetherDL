@@ -13,8 +13,7 @@ import type {
   StreamDeliveryRequest,
 } from '@platform/stream';
 import { StreamAssemblyError } from '@core/download/errors';
-import { createDownloadSystem } from '@core/download/factory';
-import type { DownloadManager } from '@core/download/manager';
+import { createDownloadSystem, type ConfigurableDownloadManager } from '@core/download/factory';
 import { createFakeDownloads, mediaItem, tick, type FakeDownloads } from '../_fixtures';
 
 const MANIFEST = 'https://cdn.test/hls/master.m3u8';
@@ -35,6 +34,8 @@ interface FakeDelivery {
   readonly adapter: StreamDeliveryAdapter;
   /** Manifest URLs assembly was asked for, in order. */
   readonly requested: string[];
+  /** Every assembly request, in order — what the manager actually asked for. */
+  readonly seen: StreamDeliveryRequest[];
   readonly released: string[];
   /** Requests still in flight, so a test can settle or observe them. */
   readonly pending: {
@@ -47,6 +48,7 @@ interface FakeDelivery {
 
 function fakeDelivery(options: { supported?: boolean; auto?: boolean } = {}): FakeDelivery {
   const requested: string[] = [];
+  const seen: StreamDeliveryRequest[] = [];
   const released: string[] = [];
   const pending: FakeDelivery['pending'] = [];
   let counter = 0;
@@ -71,6 +73,7 @@ function fakeDelivery(options: { supported?: boolean; auto?: boolean } = {}): Fa
 
   const fake: FakeDelivery = {
     requested,
+    seen,
     released,
     pending,
     settle(overrides?: Partial<StreamDelivery>): void {
@@ -82,6 +85,7 @@ function fakeDelivery(options: { supported?: boolean; auto?: boolean } = {}): Fa
       handles: (url: string) => url.endsWith('.m3u8') || url.endsWith('.mpd'),
       assemble: (request: StreamDeliveryRequest): Promise<StreamDelivery> => {
         requested.push(request.manifestUrl);
+        seen.push(request);
         if (options.auto !== false) {
           return Promise.resolve(build());
         }
@@ -95,7 +99,7 @@ function fakeDelivery(options: { supported?: boolean; auto?: boolean } = {}): Fa
 }
 
 function makeSystem(delivery?: StreamDeliveryAdapter): {
-  readonly manager: DownloadManager;
+  readonly manager: ConfigurableDownloadManager;
   readonly fake: FakeDownloads;
 } {
   const fake = createFakeDownloads();
@@ -418,6 +422,48 @@ describe('a stream job without assembly', () => {
     expect(failed?.error?.code).toBe('download-manifest-url');
     expect(fake.started).toEqual([]);
     expect(failedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the standing quality preference with every assembly, and follows a change', async () => {
+    const delivery = fakeDelivery({ auto: true });
+    const { manager } = makeSystem(delivery.adapter);
+
+    manager.configure({ streamQuality: '720' });
+    await manager.enqueue([streamItem()]);
+    await tick();
+    expect(delivery.seen[0]?.preference).toBe('720');
+
+    // A settings change applies to the next job without restarting anything (§4.9).
+    manager.configure({ streamQuality: 'lowest' });
+    await manager.enqueue([streamItem('https://cdn.test/hls/other.m3u8')]);
+    await tick();
+    expect(delivery.seen[1]?.preference).toBe('lowest');
+  });
+
+  it('records the rendition the user pinned on the job, and sends it when the job runs', async () => {
+    const delivery = fakeDelivery({ auto: true });
+    const { manager } = makeSystem(delivery.adapter);
+    manager.configure({ streamQuality: 'highest' });
+
+    const [task] = await manager.enqueue([streamItem()], { streamRenditionId: 'v720' });
+    await tick();
+
+    // On the task, because a job that is paused now and resumed tomorrow must still
+    // download the quality that was chosen (§10.6).
+    expect(task?.streamRenditionId).toBe('v720');
+    expect(delivery.seen[0]?.renditionId).toBe('v720');
+    expect(delivery.seen[0]?.preference).toBe('highest');
+  });
+
+  it('leaves the rendition unset when nobody pinned one', async () => {
+    const delivery = fakeDelivery({ auto: true });
+    const { manager } = makeSystem(delivery.adapter);
+
+    const [task] = await manager.enqueue([streamItem()]);
+    await tick();
+
+    expect(task?.streamRenditionId).toBeUndefined();
+    expect(delivery.seen[0]?.renditionId).toBeUndefined();
   });
 
   it('is refused when the adapter exists but reports itself unsupported', async () => {

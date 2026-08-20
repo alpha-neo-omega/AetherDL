@@ -18,7 +18,12 @@ import type { StreamDelivery } from '@platform/stream';
 import { createLocalStreamDelivery } from '@core/download/stream/deliver';
 import { ValidationError } from '@shared/result/errors';
 import type { MessageBus } from '@platform/messaging';
-import type { StreamAssembleRequest, StreamAssembleResult } from '@shared/types';
+import { STREAM_QUALITY_PREFERENCES } from '@shared/constants';
+import type {
+  StreamAssembleRequest,
+  StreamAssembleResult,
+  StreamQualityPreference,
+} from '@shared/types';
 import type { Unsubscribe } from '@shared/utils';
 
 export interface StreamAssemblyHostOptions {
@@ -49,11 +54,24 @@ function readRequest(payload: unknown): StreamAssembleRequest | undefined {
   }
   const maxTotalBytes = record['maxTotalBytes'];
   const requestId = record['requestId'];
+  const renditionId = record['renditionId'];
+  const preference = record['preference'];
   return {
     manifestUrl,
     ...(typeof maxTotalBytes === 'number' && maxTotalBytes > 0 && { maxTotalBytes }),
     ...(typeof requestId === 'string' && requestId !== '' && { requestId }),
+    ...(typeof renditionId === 'string' && renditionId !== '' && { renditionId }),
+    // Validated against the ratified vocabulary rather than trusted: this arrives
+    // over a message boundary (§13.8), and an unknown value must not reach selection.
+    ...(isQualityPreference(preference) && { preference }),
   };
+}
+
+/** Whether an untrusted value is one of the ratified quality preferences (§4.9). */
+function isQualityPreference(value: unknown): value is StreamQualityPreference {
+  return (
+    typeof value === 'string' && (STREAM_QUALITY_PREFERENCES as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -103,6 +121,8 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
         manifestUrl: request.manifestUrl,
         signal: controller.signal,
         ...(request.maxTotalBytes !== undefined && { maxTotalBytes: request.maxTotalBytes }),
+        ...(request.renditionId !== undefined && { renditionId: request.renditionId }),
+        ...(request.preference !== undefined && { preference: request.preference }),
         onProgress: (progress): void => {
           void bus.broadcast(STREAM_PROGRESS_BROADCAST, {
             manifestUrl: request.manifestUrl,

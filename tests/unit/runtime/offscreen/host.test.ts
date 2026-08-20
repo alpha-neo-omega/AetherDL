@@ -138,6 +138,51 @@ describe('offscreen assembly host', () => {
     expect(h.revoked).toEqual([result.url]);
   });
 
+  it('applies the quality choice it was sent across the boundary', async () => {
+    // The choice is made in the popup; the manifest is read here. If this hand-off
+    // drops it, the user's pick silently does nothing on Chromium (§10.6, §20.5).
+    const seen: string[] = [];
+    const h = harness({
+      [MASTER]: [
+        '#EXTM3U',
+        '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360',
+        'low.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080',
+        'high.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/low.m3u8': ['#EXTM3U', '#EXTINF:4,', 'l.ts', '#EXT-X-ENDLIST'].join(
+        '\n',
+      ),
+      'https://cdn.test/hls/high.m3u8': ['#EXTM3U', '#EXTINF:4,', 'h.ts', '#EXT-X-ENDLIST'].join(
+        '\n',
+      ),
+      'https://cdn.test/hls/l.ts': new Uint8Array(2),
+      'https://cdn.test/hls/h.ts': new Uint8Array(8),
+    });
+    const tracked = {
+      get: (url: string) => {
+        seen.push(url);
+        return h.http.get(url);
+      },
+      getText: (url: string) => h.http.getText(url),
+    };
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: tracked });
+    host.start();
+
+    await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER, preference: '720' });
+    expect(seen).toStrictEqual(['https://cdn.test/hls/l.ts']);
+
+    seen.length = 0;
+    await h.handlers.get('stream/assemble')?.({
+      manifestUrl: MASTER,
+      renditionId: 'https://cdn.test/hls/high.m3u8',
+      // An unknown preference must not reach selection: it arrived over a message
+      // boundary and is validated against the ratified vocabulary (§13.8, §4.9).
+      preference: 'ultra',
+    });
+    expect(seen).toStrictEqual(['https://cdn.test/hls/h.ts']);
+  });
+
   it('refuses a payload that carries no manifest URL (§13.8)', async () => {
     const h = harness();
     const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });

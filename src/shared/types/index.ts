@@ -124,6 +124,13 @@ export interface DownloadTask {
   readonly completedAt?: number;
   /** Opaque, non-PII job metadata. */
   readonly metadata?: Readonly<Record<string, unknown>>;
+  // --- Phase 8 (stream quality) additive field ---
+  /**
+   * The stream rendition this job pinned, chosen by the user before it was queued
+   * (§10.6). Absent means "whatever the quality preference resolves to at assembly
+   * time", which is how every job created before this field existed behaves.
+   */
+  readonly streamRenditionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +140,17 @@ export interface DownloadTask {
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type DetectionSensitivity = 'conservative' | 'balanced' | 'aggressive';
 export type HistoryRetention = 'forever' | '30d' | '90d' | 'session';
+/**
+ * Which rendition of a multi-quality stream to download (PROJECT_BIBLE.md §10.6).
+ *
+ * A height cap means "the best rendition at or below this", which is what a person
+ * means by "720p" — not "exactly 720 lines". `highest` is the default because the
+ * user asked to download the media, and a downloader that quietly saves a worse copy
+ * than the one available is not being helpful. The numbers are heights, as strings,
+ * so the stored value reads as what it is.
+ */
+export type StreamQualityPreference =
+  'highest' | '2160' | '1440' | '1080' | '720' | '480' | 'lowest';
 export type ReducedMotionPreference = 'system' | 'on' | 'off';
 
 export interface Settings {
@@ -149,6 +167,8 @@ export interface Settings {
   readonly reducedMotion: ReducedMotionPreference;
   readonly language: string;
   readonly detectionSensitivity: DetectionSensitivity;
+  /** Which rendition to take from a multi-quality stream (§10.6). */
+  readonly streamQuality: StreamQualityPreference;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +314,31 @@ export interface StreamAssembleRequest {
    * would let one cancel the other. Omitted, the host falls back to the URL.
    */
   readonly requestId?: string;
+  /**
+   * Pin one rendition, by the id `stream/qualities` reported for it. Takes precedence
+   * over {@link StreamAssembleRequest.preference}.
+   */
+  readonly renditionId?: string;
+  /** How to choose when nothing is pinned; the assembler's default when omitted. */
+  readonly preference?: StreamQualityPreference;
+}
+
+/**
+ * One selectable rendition of a stream, as offered to the user (§10.6).
+ *
+ * `id` is opaque and only meaningful to the assembler that produced it: an HLS
+ * variant's playlist URL, a DASH representation's id. The UI passes it back
+ * unchanged rather than re-deciding anything.
+ */
+export interface StreamRenditionSnapshot {
+  readonly id: string;
+  readonly kind: 'video' | 'audio';
+  readonly bandwidth?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly codecs?: string;
+  /** Whether this is the one the current preference would take. */
+  readonly isPreferred: boolean;
 }
 
 /** What the assembly host answers with. Encrypted manifests never get this far. */
@@ -334,7 +379,18 @@ export interface MessageMap {
   /** Drop a tab's cached detection results and stored observations. */
   readonly 'detection/clear': MessageExchange<{ readonly tabId: number }, void>;
   /** Enqueue detected media by identity key; the background resolves the items. */
-  readonly 'download/enqueue': MessageExchange<{ readonly itemIds: readonly string[] }, void>;
+  readonly 'download/enqueue': MessageExchange<
+    {
+      readonly itemIds: readonly string[];
+      /**
+       * Pin a stream rendition for these items, from `stream/qualities` (§10.6).
+       * Applies to every id in the call, which is why the picker enqueues one item
+       * at a time; omitted, the quality preference decides at assembly time.
+       */
+      readonly renditionId?: string;
+    },
+    void
+  >;
   /** Cancel a job (prompt and idempotent, §10.10). */
   readonly 'download/cancel': MessageExchange<TaskIdRequest, void>;
   /** Manually retry a failed, retryable job (§4.5). */
@@ -380,6 +436,17 @@ export interface MessageMap {
    * answers rather than sending work into a context with no listener yet.
    */
   readonly 'stream/ready': MessageExchange<void, boolean>;
+  /**
+   * List the renditions a stream offers, so the user can pick one before it is
+   * queued (§10.6). Reads the manifest and nothing else: no segment is fetched, so
+   * the cost is one small GET. Requires the host permission for the manifest origin,
+   * which the handler requests at the point of use like every other stream read
+   * (§13.7); declining ends the request and grants nothing.
+   */
+  readonly 'stream/qualities': MessageExchange<
+    { readonly manifestUrl: string },
+    readonly StreamRenditionSnapshot[]
+  >;
   /** Cancel one in-flight assembly, by request id where the caller sent one (§10.10). */
   readonly 'stream/abort': MessageExchange<
     { readonly manifestUrl: string; readonly requestId?: string },

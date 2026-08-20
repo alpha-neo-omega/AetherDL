@@ -17,6 +17,22 @@ export const MAX_RETRIES_DEFAULT = 3;
 /** Default filename template (PROJECT_BIBLE.md §10.7). */
 export const DEFAULT_FILENAME_TEMPLATE = '{title}.{ext}';
 
+/**
+ * Stream quality preferences, in the order a chooser should offer them (§10.6).
+ *
+ * Declared here, once: the settings validator and the selection logic both need this
+ * list, and two copies of it would eventually disagree about what a valid setting is.
+ */
+export const STREAM_QUALITY_PREFERENCES = [
+  'highest',
+  '2160',
+  '1440',
+  '1080',
+  '720',
+  '480',
+  'lowest',
+] as const;
+
 /** Supported video container extensions (PROJECT_BIBLE.md §5.1). */
 export const SUPPORTED_VIDEO_FORMATS: readonly string[] = [
   'mp4',

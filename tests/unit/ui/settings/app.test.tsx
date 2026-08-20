@@ -81,6 +81,7 @@ describe('ui/settings SettingsApp — catalogue', () => {
     expect(texts(view.container, '.adl-settings__heading')).toEqual([
       'Appearance',
       'Downloads',
+      'Streams',
       'Detection',
       'Notifications',
       'History',
@@ -248,6 +249,8 @@ describe('ui/settings SettingsApp — catalogue', () => {
     await flush();
     selectOption(field(view, 'Detection sensitivity') as HTMLSelectElement, 'aggressive');
     await flush();
+    selectOption(field(view, 'Stream quality') as HTMLSelectElement, '720');
+    await flush();
     selectOption(field(view, 'Keep history for') as HTMLSelectElement, '30d');
     await flush();
 
@@ -258,6 +261,7 @@ describe('ui/settings SettingsApp — catalogue', () => {
       filenameTemplate: '{title}-{quality}.{ext}',
       downloadSubfolder: 'clips',
       detectionSensitivity: 'aggressive',
+      streamQuality: '720',
       historyRetention: '30d',
     });
     view.unmount();

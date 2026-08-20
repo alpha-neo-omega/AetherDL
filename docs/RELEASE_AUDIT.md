@@ -1,12 +1,13 @@
-# AetherDL 1.3.0 — Release Audit
+# AetherDL 1.4.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.3.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
-> 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, and split-track stream
-> muxing in 1.3.0. Store submission
+> against the `1.4.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, split-track stream muxing in
+> 1.3.0, and — new in 1.4.0 — user-chosen stream renditions, MPEG-TS and packed-audio
+> demultiplexing, and the real-world conformance suite. Store submission
 > requires Owner-held credentials and is a gated manual step (§18.8); distribution is via official
 > stores only (§18.6, non-goal N17).
 >
@@ -27,18 +28,19 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.3.0` — the 1.1.0 stream feature set (ADR-010), three defect sweeps, the real icon set, and split-track stream muxing: audio and video in separate tracks are now joined into one file instead of refused |
+| Version | `1.4.0` — the 1.1.0 stream feature set (ADR-010), three defect sweeps, the real icon set, split-track muxing (1.3.0), and rendition selection plus MPEG-TS/packed-audio re-packaging ([ADR-011](adr/011-stream-rendition-selection-and-remuxing.md)): the user picks the quality, and a split-track stream is joined whichever of the two containers it arrives in |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.3.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1106 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 51 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.4.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1201 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 55 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Also executed, outside the gate | `npm run test:live` — the shipped parsers, selection and muxer against public test streams from Apple, Mux, Akamai and the DASH Industry Forum: **9 cases, all passed**. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.3.0-chrome.zip` | 131 300 | 20 | `995eeaa2c5597faa8680a368e22d129365905d79c04a6c01b8ffdda100b2f706` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.3.0-firefox.zip` | 131 366 | 20 | `d47a4505fda7d789939a7c9d83ade96cba96fafb1cebf59a7c337abc997d4f9e` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.4.0-chrome.zip` | 138 643 | 20 | `9ad363f5455a7c047308f2ff1197138e4fbf1927933914d84b0529f88cc3ada2` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.4.0-firefox.zip` | 138 709 | 20 | `a6e97dc3ab157424cf775aa2e1d2d5efb7b3159c9d78a67a2ff46380daa9ab5c` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -250,11 +252,30 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1106 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1201 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
-validations, the security gate, packaging, and 50 browser e2e tests (Chromium and Firefox, including
+validations, the security gate, packaging, and 55 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 96.78 % statements, 93.30 % branches.
+`npm run test:coverage` (which `ci` does not run): 96.37 % statements, 91.13 % branches.
+
+Branch coverage is lower than at `1.3.0`, and the reason is worth stating rather than smoothing
+over: the new format code reads bytes one at a time behind a defensive fallback per read
+(`bytes[at] ?? 0`), and each of those counts as a branch that only a truncated buffer could take.
+`ts.ts` measures 68 % branches for that reason at 92 % statements. The paths that matter — a
+malformed PES, a reserved sampling rate, a truncated parameter set, an unreadable rendition,
+descriptors in a PMT, adaptation-only packets, a PES that spans packets, a 33-bit timestamp — each
+have a test that names them.
+
+`1.4.0` added 95 tests. Over rendition selection: a ladder, a ceiling that matches nothing, a
+ceiling that excludes everything, a pinned choice, a stale pinned choice, and a manifest that
+declares no heights at all. Over MPEG-TS: a transport stream the suite writes itself, with real
+packet, PES, ADTS and parameter-set framing, so every branch runs on a machine with no ffmpeg —
+plus real-media tests where `ffmpeg` produces h264 and aac, the demuxer and writer re-package them,
+and `ffprobe` confirms the streams, a clean full decode, and the frame counts. Two committed
+fixtures (one fragmented MP4, one MPEG-TS) are downloaded end to end in a real Chromium, which must
+save exactly the bytes this code produces, computed independently in the test. The quality picker is
+exercised against a fixture ladder whose rungs serve different segment sizes, so the byte count
+proves which rendition was taken.
 
 `1.3.0` added 24 tests over split-track muxing: structural tests over hand-built boxes that pin
 which fields are rewritten and that sample data is copied byte for byte, plus real-media tests where
@@ -326,18 +347,28 @@ Honest limits of this audit:
   stay legible at 16px, and `tests/unit/build/icons.test.ts` decodes the output and asserts what the
   mark is. They are fit to submit. Whether a designed logotype or promotional tiles are wanted is a
   separate, optional Owner decision (`docs/STORE_LISTING.md` §7).
-- **Split-track streams are downloaded as of `1.3.0`, but only when both tracks are fragmented
-  MP4.** That covers most real-world DASH. An MPEG-TS split-track stream is still refused with a
-  stated reason: joining those means demuxing PES and re-packaging elementary streams, which this
-  project does not do. The muxer itself is validated against real media — `ffmpeg` produces separate
-  h264 and aac tracks, and `ffprobe` confirms two streams and a clean full decode of the joined file,
-  including the exact bytes the browser downloads in the e2e (`CHANGELOG.md` 1.3.0).
-- **The muxer is ours, and container work is unforgiving.** It rewrites three fixed-width fields and
-  copies sample data verbatim, which is the narrowest change that can produce a valid file — but no
-  real-world packager's output has been through it. A stream from a site whose fragments carry boxes
-  the fixtures do not (multiple `traf` per fragment with differing track ids, `saio`/`saiz`, unusual
-  `mvhd` versions) may fail; it will fail with a stated reason rather than produce a broken file,
-  because every refusal path is explicit.
+- **Split-track streams are joined in both containers as of `1.4.0`, for H.264 and AAC only.**
+  Fragmented MP4 (1.3.0) and MPEG-TS or packed audio (1.4.0). A rendition carrying AC-3, E-AC-3,
+  HEVC or MP3 audio is refused with the stream types named, rather than saved with a missing track.
+  An AC-3 track already inside a fragmented-MP4 rendition passes through untouched, because the
+  muxer never looks at sample data — confirmed against Apple's own AC-3 example in the live suite.
+- **Three format implementations are ours, and container work is unforgiving.** The muxer rewrites
+  three fixed-width fields and copies fragments verbatim; the demuxer and the writer take a
+  transport stream apart and put its samples into a new container, still copying every compressed
+  byte unchanged. What has been through them: media `ffmpeg` produced, two committed browser
+  fixtures, and — new at `1.4.0` — real output from Apple, Akamai and Mux, including byte-range
+  fragmented MP4 where one segment carries three `moof`/`mdat` pairs, and AC-3 audio
+  ([LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md)). What has not: a real-world MPEG-TS split-track
+  stream (public examples keep audio inside the variant), a packed-audio rendition from a real
+  packager, and any HEVC or E-AC-3 stream. Where these fail they fail with a stated reason rather
+  than producing a broken file, because every refusal path is explicit.
+- **Two real defects were found by pointing the shipped code at real manifests, and both are
+  fixed.** An HLS `AUDIO` group whose default rendition has no `URI` means the variants carry that
+  audio; reading any URI-bearing rendition as proof of a split track would have downloaded a
+  video-only rendition and muxed in an alternate audio track. And a refusal from the new demuxer
+  crossed the Chromium offscreen boundary as a generic failure, because the wire vocabulary only
+  knew the older codes. Both now have regression tests; the first was verified to fail against the
+  previous code.
 - **Stream assembly has not been tried against a live streaming site.** Its browser evidence is the
   loopback HLS fixture in `tests/e2e/stream-chromium.spec.ts`. Real sites vary in ways a fixture
   cannot reproduce: signed segment URLs that expire, redirect chains, per-request tokens, CORS

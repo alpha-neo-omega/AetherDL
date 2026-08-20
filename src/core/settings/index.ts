@@ -29,6 +29,9 @@ export const DEFAULT_SETTINGS: Settings = {
   reducedMotion: 'system',
   language: 'system',
   detectionSensitivity: 'balanced',
+  // Highest by default: the user asked to download the media, and quietly saving a
+  // worse copy than the one on offer would be the wrong kind of helpful (§10.6).
+  streamQuality: 'highest',
 };
 
 export interface SettingsService {

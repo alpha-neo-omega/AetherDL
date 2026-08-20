@@ -4,6 +4,13 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src", "tests", "build", "vitest.config.ts", "playwright.config.ts"],
+  "include": [
+    "src",
+    "tests",
+    "build",
+    "vitest.config.ts",
+    "vitest.live.config.ts",
+    "playwright.config.ts"
+  ],
   "exclude": ["node_modules", "dist", "coverage"]
 }

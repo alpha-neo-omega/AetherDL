@@ -125,6 +125,50 @@ describe('local stream delivery', () => {
     expect(delivery.supported).toBe(false);
   });
 
+  it('passes the quality choice through to assembly, and omits it when there is none', async () => {
+    // The choice is made in the popup and applied where the manifest is read, so this
+    // hand-off is the whole feature at this layer (§10.6).
+    const seen: string[] = [];
+    const routes = {
+      [MASTER]: [
+        '#EXTM3U',
+        '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360',
+        'low.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080',
+        'high.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/low.m3u8': ['#EXTM3U', '#EXTINF:4,', 'l.ts', '#EXT-X-ENDLIST'].join(
+        '\n',
+      ),
+      'https://cdn.test/hls/high.m3u8': ['#EXTM3U', '#EXTINF:4,', 'h.ts', '#EXT-X-ENDLIST'].join(
+        '\n',
+      ),
+      'https://cdn.test/hls/l.ts': new Uint8Array(4),
+      'https://cdn.test/hls/h.ts': new Uint8Array(8),
+    };
+    const client = http(routes);
+    const tracked: HttpClient = {
+      get: (url, options) => {
+        seen.push(url);
+        return client.get(url, options);
+      },
+      getText: (url, options) => client.getText(url, options),
+    };
+    const delivery = createLocalStreamDelivery({ http: tracked, objectUrl: objectUrl().adapter });
+
+    await delivery.assemble({ manifestUrl: MASTER, preference: '720' });
+    expect(seen).toStrictEqual(['https://cdn.test/hls/l.ts']);
+
+    seen.length = 0;
+    await delivery.assemble({ manifestUrl: MASTER, renditionId: 'https://cdn.test/hls/high.m3u8' });
+    expect(seen).toStrictEqual(['https://cdn.test/hls/h.ts']);
+
+    seen.length = 0;
+    await delivery.assemble({ manifestUrl: MASTER });
+    // No choice, no change: the highest bandwidth, as before this feature existed.
+    expect(seen).toStrictEqual(['https://cdn.test/hls/h.ts']);
+  });
+
   it('passes a caller ceiling through to assembly', async () => {
     const urls = objectUrl();
     const delivery = createLocalStreamDelivery({

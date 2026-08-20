@@ -141,6 +141,37 @@ describe('offscreen stream delivery', () => {
     expect(h.offscreen.closed).toBe(0);
   });
 
+  it('sends the quality choice to the host, and nothing when there is none', async () => {
+    const h = harness();
+    const delivery = createOffscreenStreamDelivery({
+      api: h.api,
+      messaging: h.messaging,
+      generateId: () => 'req-fixed',
+    });
+
+    await delivery.assemble({
+      manifestUrl: 'https://cdn.test/a.m3u8',
+      renditionId: 'v720',
+      preference: '720',
+    });
+    expect(h.sent[0]).toEqual({
+      type: 'stream/assemble',
+      payload: {
+        manifestUrl: 'https://cdn.test/a.m3u8',
+        requestId: 'req-fixed',
+        renditionId: 'v720',
+        preference: '720',
+      },
+    });
+
+    await delivery.assemble({ manifestUrl: 'https://cdn.test/b.m3u8' });
+    // Absent, not null or empty: the host applies its own default when nothing asked.
+    expect(h.sent[h.sent.length - 1]).toEqual({
+      type: 'stream/assemble',
+      payload: { manifestUrl: 'https://cdn.test/b.m3u8', requestId: 'req-fixed' },
+    });
+  });
+
   it('closes the document when the delivery is released', async () => {
     const h = harness();
     const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });

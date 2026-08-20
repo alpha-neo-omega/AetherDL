@@ -19,6 +19,12 @@ export {
 } from './runtime-client';
 export { QueuePanel, type QueuePanelLabels, type QueuePanelProps } from './queue-panel';
 export {
+  describeRendition,
+  QualityChooserDialog,
+  type QualityChooserLabels,
+  type QualityChooserProps,
+} from './quality-chooser';
+export {
   createTranslator,
   EN_MESSAGES,
   resolveCatalog,
@@ -33,4 +39,5 @@ export {
   type PopupRuntimeActions,
   type PopupRuntimeData,
   type PopupStatus,
+  type QualityChooser,
 } from './use-popup-runtime';

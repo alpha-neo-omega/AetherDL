@@ -13,7 +13,13 @@
  * Public API: PopupRuntimeClient, RuntimeClientProvider, useRuntimeClient.
  */
 import { createContext, createElement, useContext, type ReactNode } from 'react';
-import type { DownloadEventBroadcast, DownloadTask, MediaItem, Settings } from '@shared/types';
+import type {
+  DownloadEventBroadcast,
+  DownloadTask,
+  MediaItem,
+  Settings,
+  StreamRenditionSnapshot,
+} from '@shared/types';
 import type { Unsubscribe } from '@shared/utils';
 
 export interface PopupRuntimeClient {
@@ -29,8 +35,18 @@ export interface PopupRuntimeClient {
   refreshDetection(tabId: number): Promise<readonly MediaItem[]>;
   /** `download/query` — the queue, the single source of truth for state (§4.4). */
   queryQueue(): Promise<readonly DownloadTask[]>;
-  /** `download/enqueue` — by identity key; the background resolves the items (§8.6). */
-  enqueue(itemIds: readonly string[]): Promise<void>;
+  /**
+   * `download/enqueue` — by identity key; the background resolves the items (§8.6).
+   * A `renditionId` pins the stream quality the user chose for these items (§10.6).
+   */
+  enqueue(itemIds: readonly string[], renditionId?: string): Promise<void>;
+  /**
+   * `stream/qualities` — what this stream offers, so the user can choose before
+   * anything is queued (§10.6). One manifest read; no segment is fetched. Call
+   * {@link PopupRuntimeClient.requestStreamAccess} first, in the same handler, so the
+   * gesture that permits the host request is still live.
+   */
+  listStreamQualities(manifestUrl: string): Promise<readonly StreamRenditionSnapshot[]>;
   /**
    * Ask for access to the hosts a stream download will read, at the moment the user
    * asks for it (§13.7, §4.15). Resolves `true` when nothing needs asking (no stream

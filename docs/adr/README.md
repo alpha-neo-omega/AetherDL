@@ -19,6 +19,8 @@ This directory holds **future** ADRs authored under the change-control process
 | [ADR-008](008-web-ext-for-firefox-e2e.md) | `web-ext` for Firefox e2e | 2026-08-19 |
 | [ADR-009](009-axe-core-for-accessibility-tests.md) | `axe-core` for accessibility tests | 2026-08-19 |
 | [ADR-010](010-non-drm-stream-assembly.md) | Non-DRM HLS/DASH assembly, and the network claim | 2026-08-20 |
+| [ADR-011](011-stream-rendition-selection-and-remuxing.md) | Stream rendition selection, and container work on stream tracks | 2026-08-20 |
 
 > ADRs here never supersede PROJECT_BIBLE.md. An accepted ADR is applied by amending the Bible.
-> ADR-010 has been applied that way: the Bible is at version 1.1.0, with §14.3 amended.
+> ADR-010 and ADR-011 have been applied that way: the Bible is at version 1.2.0, with §14.3
+> amended by the first and §4.9, §8.5, §10.6 and §16 by the second.

@@ -47,6 +47,13 @@ export const EN_MESSAGES = {
 
   'card.download': 'Download',
   'card.copyLink': 'Copy link',
+  'card.chooseQuality': 'Quality',
+  'quality.title': 'Choose a quality',
+  'quality.loading': 'Reading the stream…',
+  'quality.empty': 'This stream offers only one quality.',
+  'quality.cancel': 'Cancel',
+  'quality.preferred': 'Preferred',
+  'quality.audioTrack': 'Audio track',
   'card.select': 'Select',
   'card.unsupported': 'Unsupported',
   'card.estimated': 'estimated',

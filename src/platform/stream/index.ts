@@ -6,10 +6,11 @@
  *          URL, so the actual write still belongs to the browser's download manager.
  * Restrictions: Platform layer — declares types only. An implementation MUST refuse
  *          encrypted/DRM streams; no key handling exists anywhere (§6, ADR-005).
- * Dependencies: none.
+ * Dependencies: shared/types (the quality preference vocabulary).
  * Public API: StreamAssemblyProgressReport, StreamDeliveryRequest, StreamDelivery,
  *          StreamDeliveryAdapter.
  */
+import type { StreamQualityPreference } from '@shared/types';
 export interface StreamAssemblyProgressReport {
   readonly segmentsDone: number;
   readonly segmentsTotal: number;
@@ -21,6 +22,10 @@ export interface StreamDeliveryRequest {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: StreamAssemblyProgressReport) => void;
   readonly maxTotalBytes?: number;
+  /** The rendition the user pinned before queueing, if any (§10.6). */
+  readonly renditionId?: string;
+  /** The standing quality preference, applied when nothing is pinned (§10.6). */
+  readonly preference?: StreamQualityPreference;
 }
 
 export interface StreamDelivery {

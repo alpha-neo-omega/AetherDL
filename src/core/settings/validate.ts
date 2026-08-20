@@ -11,6 +11,7 @@
  */
 import { err, ok, type AppError, type Result } from '@shared/result';
 import { ValidationError } from '@shared/result/errors';
+import { STREAM_QUALITY_PREFERENCES } from '@shared/constants';
 import { DEFAULT_SETTINGS } from '@core/settings';
 import type { Settings } from '@shared/types';
 
@@ -88,6 +89,8 @@ const VALIDATORS: Readonly<{
   contextMenu: (value): value is boolean => typeof value === 'boolean',
   reducedMotion: (value): value is Settings['reducedMotion'] => isOneOf(REDUCED_MOTION, value),
   language: (value): value is string => typeof value === 'string' && LANGUAGE_PATTERN.test(value),
+  streamQuality: (value): value is Settings['streamQuality'] =>
+    isOneOf(STREAM_QUALITY_PREFERENCES, value),
   detectionSensitivity: (value): value is Settings['detectionSensitivity'] =>
     isOneOf(SENSITIVITIES, value),
 };

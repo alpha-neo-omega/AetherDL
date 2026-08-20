@@ -159,6 +159,34 @@
     "message": "Copy link",
     "description": "Popup: card.copyLink"
   },
+  "card_chooseQuality": {
+    "message": "Quality",
+    "description": "Popup: card.chooseQuality"
+  },
+  "quality_title": {
+    "message": "Choose a quality",
+    "description": "Popup: quality.title"
+  },
+  "quality_loading": {
+    "message": "Reading the stream…",
+    "description": "Popup: quality.loading"
+  },
+  "quality_empty": {
+    "message": "This stream offers only one quality.",
+    "description": "Popup: quality.empty"
+  },
+  "quality_cancel": {
+    "message": "Cancel",
+    "description": "Popup: quality.cancel"
+  },
+  "quality_preferred": {
+    "message": "Preferred",
+    "description": "Popup: quality.preferred"
+  },
+  "quality_audioTrack": {
+    "message": "Audio track",
+    "description": "Popup: quality.audioTrack"
+  },
   "card_select": {
     "message": "Select",
     "description": "Popup: card.select"
@@ -394,6 +422,46 @@
   "settings_section_detection": {
     "message": "Detection",
     "description": "Settings: settings.section.detection"
+  },
+  "settings_section_streams": {
+    "message": "Streams",
+    "description": "Settings: settings.section.streams"
+  },
+  "settings_streamQuality": {
+    "message": "Stream quality",
+    "description": "Settings: settings.streamQuality"
+  },
+  "settings_streamQuality_help": {
+    "message": "Which rendition to take when a stream offers several. A height is a ceiling: the best copy at or below it.",
+    "description": "Settings: settings.streamQuality.help"
+  },
+  "settings_streamQuality_highest": {
+    "message": "Highest available",
+    "description": "Settings: settings.streamQuality.highest"
+  },
+  "settings_streamQuality_2160": {
+    "message": "Up to 2160p (4K)",
+    "description": "Settings: settings.streamQuality.2160"
+  },
+  "settings_streamQuality_1440": {
+    "message": "Up to 1440p",
+    "description": "Settings: settings.streamQuality.1440"
+  },
+  "settings_streamQuality_1080": {
+    "message": "Up to 1080p",
+    "description": "Settings: settings.streamQuality.1080"
+  },
+  "settings_streamQuality_720": {
+    "message": "Up to 720p",
+    "description": "Settings: settings.streamQuality.720"
+  },
+  "settings_streamQuality_480": {
+    "message": "Up to 480p",
+    "description": "Settings: settings.streamQuality.480"
+  },
+  "settings_streamQuality_lowest": {
+    "message": "Smallest available",
+    "description": "Settings: settings.streamQuality.lowest"
   },
   "settings_section_notifications": {
     "message": "Notifications",

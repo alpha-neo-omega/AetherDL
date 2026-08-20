@@ -17,6 +17,7 @@ import type {
   DownloadTask,
   MediaItem,
   Settings,
+  StreamRenditionSnapshot,
   TaskState,
 } from '@shared/types';
 import { DEFAULT_SETTINGS } from '@core/settings';
@@ -69,6 +70,7 @@ export function cardLabels(): MediaCardLabels {
   return {
     download: t('card.download'),
     copyLink: t('card.copyLink'),
+    chooseQuality: t('card.chooseQuality'),
     select: t('card.select'),
     unsupported: t('card.unsupported'),
     estimated: t('card.estimated'),
@@ -121,6 +123,8 @@ export interface FakeRuntimeClient {
   setTasks(tasks: readonly DownloadTask[]): void;
   /** Decide what a point-of-use host-permission request answers (§13.7). */
   setStreamAccess(granted: boolean): void;
+  /** What `stream/qualities` reports for the next chooser (§10.6). */
+  setStreamQualities(renditions: readonly StreamRenditionSnapshot[]): void;
   /** Make the next call of a method reject with `error`. */
   failNext(method: string, error: unknown): void;
   /** Push a runtime download event, as the background broadcasts it. */
@@ -142,6 +146,7 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
   let tasks: readonly DownloadTask[] = [];
   let settings: Settings = DEFAULT_SETTINGS;
   let streamAccess = true;
+  let streamQualities: readonly StreamRenditionSnapshot[] = [];
   const settingsListeners = new Set<(next: Settings) => void>();
 
   const guard = <T>(method: string, argument: string, value: T): Promise<T> => {
@@ -168,6 +173,9 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
     },
     setStreamAccess(granted: boolean): void {
       streamAccess = granted;
+    },
+    setStreamQualities(renditions: readonly StreamRenditionSnapshot[]): void {
+      streamQualities = renditions;
     },
     failNext(method: string, error: unknown): void {
       failures.set(method, error);
@@ -199,7 +207,18 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
       queryDetection: (id: number) => guard('queryDetection', String(id), items),
       refreshDetection: (id: number) => guard('refreshDetection', String(id), items),
       queryQueue: () => guard('queryQueue', '', tasks),
-      enqueue: (itemIds: readonly string[]) => guard<void>('enqueue', itemIds.join(','), undefined),
+      enqueue: (itemIds: readonly string[], renditionId?: string) =>
+        guard<void>(
+          'enqueue',
+          renditionId === undefined ? itemIds.join(',') : `${itemIds.join(',')}@${renditionId}`,
+          undefined,
+        ),
+      listStreamQualities: (manifestUrl: string) =>
+        guard<readonly StreamRenditionSnapshot[]>(
+          'listStreamQualities',
+          manifestUrl,
+          streamQualities,
+        ),
       requestStreamAccess: (urls: readonly string[]) =>
         guard<boolean>('requestStreamAccess', urls.join(','), streamAccess),
       cancel: (id: string) => guard<void>('cancel', id, undefined),

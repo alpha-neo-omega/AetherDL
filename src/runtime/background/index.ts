@@ -25,6 +25,7 @@ import {
 import { createSettingsRepository } from '@core/storage/settings-repository';
 import { QUEUE_DATABASE_NAME, QUEUE_STORE_NAME } from '@core/storage/queue-repository';
 import { createBrowser } from '@platform/browser/factory';
+import { createHttpClient } from '@platform/http/service';
 import { createIndexedDbObjectStore } from '@platform/storage/indexeddb';
 import type { AppError } from '@shared/result';
 import { formatMessage } from '@shared/utils';
@@ -79,6 +80,9 @@ const downloads = createBackgroundDownloadRuntime({
   // The settings service is the single source; the download runtime keeps no copy
   // and applies the download-related values to the system it owns (§4.9, §8.7).
   getSettings: () => settings.get(),
+  // Reads a manifest — and only a manifest — so the popup can offer the qualities a
+  // stream actually has (§10.6). The same single network door every other read uses.
+  http: createHttpClient(),
 });
 downloads.start();
 

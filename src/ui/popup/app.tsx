@@ -19,6 +19,7 @@ import { Button, MediaCard, StatusView, type MediaCardLabels } from '@ui/compone
 import { ThemeProvider, type MediaPreferences, type ThemeMode } from '@ui/design-system';
 import { INITIAL_POPUP_VIEW, popupViewReducer, toFilterSpec, type KindFilter } from '@ui/state';
 import { describeError } from './errors';
+import { QualityChooserDialog, type QualityChooserLabels } from './quality-chooser';
 import { QueuePanel, type QueuePanelLabels } from './queue-panel';
 import { createTranslator, type MessageKey, type Translate } from './strings';
 import { RuntimeClientProvider, useRuntimeClient, type PopupRuntimeClient } from './runtime-client';
@@ -62,6 +63,16 @@ function taskStateLabels(t: Translate): Readonly<Record<TaskState, string>> {
     labels[state] = t(key);
   }
   return labels;
+}
+
+/**
+ * Whether this item has qualities to choose between (§10.6).
+ *
+ * Only a manifest does: it lists renditions. A progressive file is one file, and
+ * offering a chooser for it would open an empty dialog.
+ */
+function hasQualities(item: MediaItem): boolean {
+  return item.delivery === 'hls' || item.delivery === 'dash';
 }
 
 /** The most recent queue entry per media item; the queue stays authoritative (§4.4). */
@@ -110,6 +121,7 @@ function PopupSurface(props: {
     () => ({
       download: t('card.download'),
       copyLink: t('card.copyLink'),
+      chooseQuality: t('card.chooseQuality'),
       select: t('card.select'),
       unsupported: t('card.unsupported'),
       estimated: t('card.estimated'),
@@ -138,6 +150,18 @@ function PopupSurface(props: {
         'media-source': t('card.delivery.mediaSource'),
       },
       taskState: taskStateLabels(t),
+    }),
+    [t],
+  );
+
+  const qualityLabels = useMemo<QualityChooserLabels>(
+    () => ({
+      title: t('quality.title'),
+      loading: t('quality.loading'),
+      empty: t('quality.empty'),
+      cancel: t('quality.cancel'),
+      preferred: t('quality.preferred'),
+      audioTrack: t('quality.audioTrack'),
     }),
     [t],
   );
@@ -226,6 +250,7 @@ function PopupSurface(props: {
                 actions.download([itemId]);
               }}
               onCopyLink={actions.copyLink}
+              {...(hasQualities(item) && { onChooseQuality: actions.chooseQuality })}
               labels={cardLabels}
               {...(props.locale !== undefined && { locale: props.locale })}
             />
@@ -351,6 +376,21 @@ function PopupSurface(props: {
         onClear={actions.clearQueue}
         {...(props.locale !== undefined && { locale: props.locale })}
       />
+
+      {runtime.chooser !== undefined && (
+        <QualityChooserDialog
+          title={runtime.chooser.item.title}
+          status={runtime.chooser.status}
+          renditions={runtime.chooser.renditions}
+          labels={qualityLabels}
+          onPick={(renditionId) => {
+            if (runtime.chooser !== undefined) {
+              actions.downloadRendition(runtime.chooser.item.id, renditionId);
+            }
+          }}
+          onClose={actions.closeChooser}
+        />
+      )}
     </div>
   );
 }

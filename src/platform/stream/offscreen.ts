@@ -258,6 +258,10 @@ export function createOffscreenStreamDelivery(
             manifestUrl: request.manifestUrl,
             requestId,
             ...(ceiling !== undefined && { maxTotalBytes: ceiling }),
+            // The quality choice has to cross the boundary too: the assembling
+            // context is the one that reads the manifest (§10.6).
+            ...(request.renditionId !== undefined && { renditionId: request.renditionId }),
+            ...(request.preference !== undefined && { preference: request.preference }),
           },
           { timeoutMs: ASSEMBLE_TIMEOUT_MS },
         );

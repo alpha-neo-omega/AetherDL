@@ -1,6 +1,6 @@
 {
   "name": "aetherdl",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "AetherDL \u2014 Fast. Private. Powerful. A modern cross-browser media downloader.",
   "type": "module",
@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:e2e": "playwright test",
+    "test:live": "vitest run --config vitest.live.config.ts",
     "build:chrome": "tsx build/scripts/build-extension.ts chrome",
     "build:firefox": "tsx build/scripts/build-extension.ts firefox",
     "build": "tsx build/scripts/build-extension.ts all",

@@ -21,6 +21,10 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   // The committed split-track HLS fixture (see make-stream-fixtures.ts).
   '.m3u8': 'application/vnd.apple.mpegurl',
   '.m4s': 'video/iso.segment',
+  // The committed split-track MPEG-TS fixture (see make-stream-fixtures.ts). Named
+  // `.m2ts` so the repository's TypeScript tooling does not read a transport stream
+  // as source; the assembler treats both extensions the same (§5.1).
+  '.m2ts': 'video/mp2t',
 };
 
 /**
@@ -31,6 +35,28 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 export const HLS_SEGMENT_BYTES = 4096;
 export const HLS_SEGMENT_COUNT = 3;
 export const HLS_TOTAL_BYTES = HLS_SEGMENT_BYTES * HLS_SEGMENT_COUNT;
+
+/**
+ * A multi-quality ladder, for the stream quality chooser (§10.6).
+ *
+ * Each rung serves segments of a DIFFERENT size, so the number of bytes the browser
+ * saved says which rendition was actually taken — no need to trust a log line.
+ */
+export const HLS_LADDER = [
+  { height: 360, width: 640, bandwidth: 400_000, segmentBytes: 1024 },
+  { height: 720, width: 1280, bandwidth: 2_400_000, segmentBytes: 2048 },
+  { height: 1080, width: 1920, bandwidth: 6_000_000, segmentBytes: 4096 },
+] as const;
+/** Segments per rung; the total for a rung is this times its segment size. */
+export const HLS_LADDER_SEGMENTS = 2;
+
+export function ladderTotalBytes(height: number): number {
+  const rung = HLS_LADDER.find((entry) => entry.height === height);
+  if (rung === undefined) {
+    throw new Error(`no rung at ${String(height)}`);
+  }
+  return rung.segmentBytes * HLS_LADDER_SEGMENTS;
+}
 
 export interface FixtureSite {
   /** Origin the fixture pages are served from, e.g. `http://127.0.0.1:41234`. */
@@ -96,6 +122,60 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
         'content-length': String(Buffer.byteLength(body)),
       });
       response.end(body);
+      return;
+    }
+    // The quality ladder: one master, one media playlist per rung, and segments
+    // whose SIZE identifies the rung (§10.6).
+    if (requested === '/media/hls/ladder.m3u8') {
+      const body = [
+        '#EXTM3U',
+        ...HLS_LADDER.flatMap((rung) => [
+          `#EXT-X-STREAM-INF:BANDWIDTH=${String(rung.bandwidth)},RESOLUTION=${String(rung.width)}x${String(rung.height)},CODECS="avc1.4d401f"`,
+          `q-${String(rung.height)}.m3u8`,
+        ]),
+        '',
+      ].join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    const rungPlaylist = /^\/media\/hls\/q-(\d+)\.m3u8$/.exec(requested);
+    if (rungPlaylist !== null) {
+      const height = Number(rungPlaylist[1]);
+      if (!HLS_LADDER.some((rung) => rung.height === height)) {
+        response.writeHead(404).end();
+        return;
+      }
+      const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:4'];
+      for (let index = 1; index <= HLS_LADDER_SEGMENTS; index += 1) {
+        lines.push('#EXTINF:4.000,', `q-${String(height)}-${String(index)}.ts`);
+      }
+      lines.push('#EXT-X-ENDLIST', '');
+      const body = lines.join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    const rungSegment = /^\/media\/hls\/q-(\d+)-(\d+)\.ts$/.exec(requested);
+    if (rungSegment !== null) {
+      const height = Number(rungSegment[1]);
+      const index = Number(rungSegment[2]);
+      const rung = HLS_LADDER.find((entry) => entry.height === height);
+      if (rung === undefined || index < 1 || index > HLS_LADDER_SEGMENTS) {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'video/mp2t',
+        'content-length': String(rung.segmentBytes),
+      });
+      response.end(Buffer.alloc(rung.segmentBytes, index));
       return;
     }
     const segment = /^\/media\/hls\/seg-(\d+)\.ts$/.exec(requested);

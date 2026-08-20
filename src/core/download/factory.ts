@@ -13,6 +13,7 @@ import {
   MAX_CONCURRENT_DOWNLOADS_DEFAULT,
   MAX_RETRIES_DEFAULT,
 } from '@shared/constants';
+import type { StreamQualityPreference } from '@shared/types';
 import type { ConflictAction, DownloadsAdapter } from '@platform/downloads';
 import type { StreamDeliveryAdapter } from '@platform/stream';
 import { createConcurrencyLimiter } from '@core/download/concurrency/concurrency';
@@ -48,6 +49,8 @@ export interface DownloadSystemOptions {
   readonly filenameTemplate?: string;
   readonly conflictAction?: ConflictAction;
   readonly downloadSubfolder?: string;
+  /** Which rendition of a multi-quality stream to take (§10.6). */
+  readonly streamQuality?: StreamQualityPreference;
   /**
    * Assembles non-encrypted HLS/DASH manifests into a local file (§10.6). Omitted,
    * stream items stay refused at validation, exactly as before.
@@ -68,6 +71,7 @@ export interface DownloadSystemConfiguration {
   readonly maxRetries?: number;
   readonly filenameTemplate?: string;
   readonly downloadSubfolder?: string;
+  readonly streamQuality?: StreamQualityPreference;
 }
 
 /**
@@ -126,6 +130,7 @@ export function createDownloadSystem(options: DownloadSystemOptions): Configurab
   // live change needs — no manager state to refresh, nothing to restart (§10.7).
   let filenameTemplate = options.filenameTemplate ?? DEFAULT_FILENAME_TEMPLATE;
   let downloadSubfolder = options.downloadSubfolder ?? '';
+  let streamQuality: StreamQualityPreference = options.streamQuality ?? 'highest';
 
   const manager = createDownloadManager({
     downloads: options.downloads,
@@ -141,6 +146,9 @@ export function createDownloadSystem(options: DownloadSystemOptions): Configurab
     conflictAction: options.conflictAction ?? 'uniquify',
     get downloadSubfolder(): string {
       return downloadSubfolder;
+    },
+    get streamQuality(): StreamQualityPreference {
+      return streamQuality;
     },
     ...(options.history !== undefined && { history: options.history }),
     ...(options.streamDelivery !== undefined && { streamDelivery: options.streamDelivery }),
@@ -162,6 +170,9 @@ export function createDownloadSystem(options: DownloadSystemOptions): Configurab
       }
       if (configuration.downloadSubfolder !== undefined) {
         downloadSubfolder = configuration.downloadSubfolder;
+      }
+      if (configuration.streamQuality !== undefined) {
+        streamQuality = configuration.streamQuality;
       }
     },
   };

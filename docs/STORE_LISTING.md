@@ -109,14 +109,15 @@ AetherDL finds the media on the page you are already looking at and downloads it
 - Downloads direct and progressive media through the browser's own download manager.
 - Downloads **non-encrypted HLS and DASH streams** by reading the playlist, fetching its segments in
   order and joining them into one file, which your browser then saves (PROJECT_BIBLE.md §10.6).
+  A stream whose **audio is a separate track** — most real-world DASH, and much HLS — is **joined**
+  into one file, whether the renditions are fragmented MP4 or MPEG-TS. You can **choose the
+  quality**: a setting, or a per-download pick from what the stream actually offers.
   State the limits rather than imply them away — see CHANGELOG.md "Known limitations":
-  a stream whose **audio is a separate track** is refused rather than saved as silent video (most
-  real-world DASH is packaged that way), **live** streams cannot be downloaded, a stream is
-  assembled in memory one at a time and declined past 1 GiB,
-  the joined file is the segments concatenated with no remuxing (`.ts` for MPEG-TS, `.mp4` for
-  fragmented MP4), only the highest-bandwidth rendition is taken, and **Firefox 115–127 cannot
-  download streams at all** because the permission key AetherDL uses to ask for host access at the
-  moment you click arrived in Firefox 128.
+  only **H.264 video and AAC audio** can be joined and anything else is refused with a reason,
+  **live** streams cannot be downloaded, a stream is assembled in memory one at a time and declined
+  past 1 GiB and is not resumable, and **Firefox 115–127 cannot download streams at all** because
+  the permission key AetherDL uses to ask for host access at the moment you click arrived in
+  Firefox 128.
 - Shows what it found before you commit: title, type, kind, resolution, duration, quality and
   source host. A field it cannot determine is left off the card rather than guessed
   (PROJECT_BIBLE.md §4.2). **Do not claim a file size**: size reaches a card only through network

@@ -13,7 +13,13 @@
  */
 import { DownloadError, PlatformError } from '@shared/result/errors';
 import type { AppError } from '@shared/result';
-import type { DownloadTask, HistoryRecord, MediaItem, TaskState } from '@shared/types';
+import type {
+  DownloadTask,
+  HistoryRecord,
+  MediaItem,
+  StreamQualityPreference,
+  TaskState,
+} from '@shared/types';
 import { TypedEventEmitter } from '@shared/utils';
 import type { ConflictAction, DownloadChange, DownloadsAdapter } from '@platform/downloads';
 import type { StreamDelivery, StreamDeliveryAdapter } from '@platform/stream';
@@ -49,6 +55,11 @@ export interface DownloadManagerDeps {
   readonly filenameTemplate: string;
   readonly conflictAction: ConflictAction;
   readonly downloadSubfolder?: string;
+  /**
+   * The standing stream-quality preference (§10.6). Read per job, like the filename
+   * template, so a settings change applies to the next job without a restart.
+   */
+  readonly streamQuality?: StreamQualityPreference;
   /**
    * Assembles a non-encrypted HLS/DASH manifest into a local URL (§10.6). Omitted,
    * or reporting `supported: false`, keeps stream items refused at validation — the
@@ -486,6 +497,10 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       const delivery = await adapter.assemble({
         manifestUrl: job.item.url,
         signal: controller.signal,
+        // What quality to fetch: the job's own pinned rendition first, else whatever
+        // the current preference resolves to (§10.6).
+        ...(job.streamRenditionId !== undefined && { renditionId: job.streamRenditionId }),
+        ...(deps.streamQuality !== undefined && { preference: deps.streamQuality }),
         onProgress: (progressReport): void => {
           // Only a job still preparing may be patched: a concurrent cancel/remove
           // owns it otherwise, and a stale patch would resurrect it (§10.2).
@@ -632,7 +647,12 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     void handleChange(change);
   });
 
-  const createJob = (item: MediaItem, priority: number, index: number): DownloadTask => {
+  const createJob = (
+    item: MediaItem,
+    priority: number,
+    index: number,
+    streamRenditionId?: string,
+  ): DownloadTask => {
     const name = filename.generate(item, deps.filenameTemplate, index);
     return {
       id: generateId(),
@@ -644,6 +664,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       priority,
       createdAt: clock(),
       updatedAt: clock(),
+      ...(streamRenditionId !== undefined && { streamRenditionId }),
     };
   };
 
@@ -734,7 +755,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       const created: DownloadTask[] = [];
       let index = 0;
       for (const item of items) {
-        const job = createJob(item, priority, index);
+        const job = createJob(item, priority, index, options?.streamRenditionId);
         index += 1;
         const validation = validate(item);
         if (validation.ok) {

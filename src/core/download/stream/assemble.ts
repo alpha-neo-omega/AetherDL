@@ -13,7 +13,8 @@
  *          core/download/stream (hls, dash).
  * Public API: STREAM_MAX_TOTAL_BYTES, STREAM_MAX_SEGMENT_BYTES, StreamKind,
  *          AssembleRequest, AssembledStream, StreamAssemblyProgress,
- *          detectStreamKind, streamOriginsFor, assembleStream.
+ *          detectStreamKind, streamOriginsFor, planStream, assembleStream,
+ *          listStreamRenditions, PlannedSegment, FetchPlan.
  */
 import { err, ok, type Result } from '@shared/result';
 import { isProtectedStreamCode, streamMessageKeyFor } from '@shared/result/stream';
@@ -30,8 +31,17 @@ import {
   parseHlsPlaylist,
   type HlsAudioRendition,
   type HlsSegment,
+  type HlsVariant,
 } from '@core/download/stream/hls';
-import { muxFragmentedMp4, splitFragmentedMp4, type Mp4Track } from '@core/download/stream/mux';
+import { muxFragmentedMp4, trackFromSegments, type Mp4Track } from '@core/download/stream/mux';
+import { writeFragmentedMp4 } from '@core/download/stream/mp4write';
+import { demuxMpegTs, demuxPackedAudio, TS_CLOCK_HZ } from '@core/download/stream/ts';
+import {
+  selectRendition,
+  type Rendition,
+  type StreamSelection,
+} from '@core/download/stream/quality';
+import type { StreamRenditionSnapshot } from '@shared/types';
 
 /**
  * Assembly holds the finished media in memory before handing it to the browser, so
@@ -56,6 +66,11 @@ export interface AssembleRequest {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: StreamAssemblyProgress) => void;
   readonly maxTotalBytes?: number;
+  /**
+   * Which rendition to take: the user's pinned choice, or the standing quality
+   * preference (§10.6). Omitted keeps the original behaviour — highest bandwidth.
+   */
+  readonly selection?: StreamSelection;
 }
 
 export interface AssembledStream {
@@ -63,8 +78,8 @@ export interface AssembledStream {
   /** Segment payloads in playlist order; the caller concatenates or streams them. */
   readonly parts: readonly Uint8Array[];
   readonly byteLength: number;
-  /** Container the assembled bytes actually are — `ts` or `mp4`. */
-  readonly extension: 'ts' | 'mp4';
+  /** Container the assembled bytes actually are — `ts`, `aac` or `mp4`. */
+  readonly extension: 'ts' | 'aac' | 'mp4';
   readonly mimeType: string;
   readonly segmentCount: number;
   /** Every origin the assembly read from, for the permission the caller requested. */
@@ -115,14 +130,21 @@ function fail(message: string, code: string, retryable = false): StreamAssemblyE
     : new StreamAssemblyError(message, options);
 }
 
-/** Extension implied by a segment URL: fragmented MP4 or MPEG-TS. */
-function containerFor(segmentUrl: string): 'ts' | 'mp4' {
+/**
+ * What a segment URL says it is: a transport stream, a bare ADTS audio file (HLS
+ * "packed audio"), or fragmented MP4 — which is the assumption when nothing says
+ * otherwise, because that is what a segment with no telling extension almost always is.
+ */
+function containerFor(segmentUrl: string): 'ts' | 'aac' | 'mp4' {
   const path = segmentUrl.split(/[?#]/)[0] ?? '';
   const extension = (path.split('.').pop() ?? '').toLowerCase();
-  return extension === 'ts' || extension === 'm2ts' || extension === 'mts' ? 'ts' : 'mp4';
+  if (extension === 'ts' || extension === 'm2ts' || extension === 'mts') {
+    return 'ts';
+  }
+  return extension === 'aac' || extension === 'adts' ? 'aac' : 'mp4';
 }
 
-interface PlannedSegment {
+export interface PlannedSegment {
   readonly url: string;
   readonly range?: { readonly offset: number; readonly length: number };
 }
@@ -132,7 +154,7 @@ interface PlannedSegment {
  * `muxed` is a video track and an audio track that have to be joined into one file,
  * which is how most real DASH — and much HLS — is packaged (§10.6).
  */
-type FetchPlan =
+export type FetchPlan =
   | {
       readonly kind: StreamKind;
       readonly mode: 'single';
@@ -210,13 +232,36 @@ async function planHlsMedia(
   );
 }
 
+/** An HLS variant as something {@link selectRendition} can rank; its URL is its id. */
+function renditionOfVariant(variant: HlsVariant): Rendition {
+  return {
+    id: variant.url,
+    ...(variant.bandwidth !== undefined && { bandwidth: variant.bandwidth }),
+    ...(variant.width !== undefined && { width: variant.width }),
+    ...(variant.height !== undefined && { height: variant.height }),
+    ...(variant.codecs !== undefined && { codecs: variant.codecs }),
+  };
+}
+
 /**
- * Whether a track's segments are fragmented MP4, which is what muxing needs. MPEG-TS
- * renditions would have to be demuxed and re-packaged — a different job, not started
- * here — so a TS stream with separate audio stays refused rather than half-supported.
+ * A DASH representation's selection id.
+ *
+ * The AdaptationSet index is part of it because `Representation@id` is only required
+ * to be unique within its own set, and a picker that offers two entries with the same
+ * id cannot honour either of them reliably.
  */
-function isFragmentedTrack(segments: readonly PlannedSegment[]): boolean {
-  return segments.every((segment) => containerFor(segment.url) === 'mp4');
+function representationKey(representation: DashRepresentation): string {
+  return `${String(representation.setIndex)}/${representation.id}`;
+}
+
+function renditionOfRepresentation(representation: DashRepresentation): Rendition {
+  return {
+    id: representationKey(representation),
+    ...(representation.bandwidth !== undefined && { bandwidth: representation.bandwidth }),
+    ...(representation.width !== undefined && { width: representation.width }),
+    ...(representation.height !== undefined && { height: representation.height }),
+    ...(representation.codecs !== undefined && { codecs: representation.codecs }),
+  };
 }
 
 /** The audio rendition to pair with a variant: its own group, default first. */
@@ -244,10 +289,10 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
       return err(fail(playlist.reason, `stream-${playlist.code}`));
     }
     if (playlist.kind === 'master') {
-      // Highest bandwidth wins; the user's quality choice is a later concern (§10.6).
-      const best = [...playlist.variants].sort(
-        (left, right) => (right.bandwidth ?? 0) - (left.bandwidth ?? 0),
-      )[0];
+      // Which variant to take is the user's call: a pinned rendition, else the
+      // quality preference, else the highest bandwidth on offer (§10.6).
+      const chosen = selectRendition(playlist.variants.map(renditionOfVariant), request.selection);
+      const best = playlist.variants.find((variant) => variant.url === chosen?.id);
       if (best === undefined) {
         return err(fail('Master playlist lists no usable variant', 'stream-hls-no-variant'));
       }
@@ -278,16 +323,6 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
       const audioSegments = await planHlsMedia(request, rendition.url);
       if (!audioSegments.ok) {
         return audioSegments;
-      }
-      if (!isFragmentedTrack(videoSegments.value) || !isFragmentedTrack(audioSegments.value)) {
-        // MPEG-TS renditions would have to be demuxed and re-packaged, which this
-        // project does not do. Refused, with the reason, rather than saved silent.
-        return err(
-          fail(
-            'This stream keeps its audio in a separate MPEG-TS track, which cannot be joined into one file',
-            'stream-hls-separate-audio',
-          ),
-        );
       }
       return ok({
         kind: 'hls',
@@ -327,20 +362,32 @@ async function planDash(request: AssembleRequest): Promise<Result<FetchPlan, Str
   if (manifest.kind === 'dynamic') {
     return err(fail(manifest.reason, 'stream-dash-dynamic'));
   }
-  const representation: DashRepresentation | undefined =
-    manifest.representations[manifest.defaultIndex];
-  if (representation === undefined) {
+  if (manifest.representations.length === 0) {
     return err(fail('Manifest lists no usable representation', 'stream-dash-no-representation'));
   }
   // Video in one AdaptationSet and audio in another means no single representation
   // holds both, so saving one of them alone would be a silent video. Both are fetched
   // and joined into one file instead (§10.6).
-  const best = (kind: 'video' | 'audio'): DashRepresentation | undefined =>
-    [...manifest.representations]
-      .filter((entry) => entry.contentType === kind)
-      .sort((left, right) => (right.bandwidth ?? 0) - (left.bandwidth ?? 0))[0];
-  const video = best('video');
-  const audio = best('audio');
+  const ofKind = (kind: 'video' | 'audio'): readonly DashRepresentation[] =>
+    manifest.representations.filter((entry) => entry.contentType === kind);
+  /** The video track honours the user's choice; audio is taken at its best. */
+  const pick = (
+    candidates: readonly DashRepresentation[],
+    selection: StreamSelection | undefined,
+  ): DashRepresentation | undefined => {
+    const chosen = selectRendition(candidates.map(renditionOfRepresentation), selection);
+    return candidates.find((entry) => representationKey(entry) === chosen?.id);
+  };
+  const video = pick(ofKind('video'), request.selection);
+  const audio = pick(ofKind('audio'), undefined);
+  const representation =
+    pick(
+      ofKind('video').length > 0 ? ofKind('video') : manifest.representations,
+      request.selection,
+    ) ?? manifest.representations[manifest.defaultIndex];
+  if (representation === undefined) {
+    return err(fail('Manifest lists no usable representation', 'stream-dash-no-representation'));
+  }
 
   if (video !== undefined && audio !== undefined && video.setIndex !== audio.setIndex) {
     return ok({
@@ -365,6 +412,150 @@ function segmentsOf(representation: DashRepresentation): readonly PlannedSegment
   }));
 }
 
+/**
+ * List what a stream offers, so the user can choose before anything is queued
+ * (§10.6).
+ *
+ * Reads the manifest and nothing else: no segment, no rendition playlist. A stream
+ * with only one rendition — a media playlist handed to us directly, a single-quality
+ * manifest — returns an empty list, because there is nothing to choose and offering a
+ * choice of one would be theatre.
+ */
+export async function listStreamRenditions(
+  request: AssembleRequest,
+): Promise<Result<readonly StreamRenditionSnapshot[], StreamAssemblyError>> {
+  const kind = detectStreamKind(request.manifestUrl);
+  if (kind === undefined) {
+    return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
+  }
+  const text = await fetchText(request.http, request.manifestUrl, request.signal);
+  if (!text.ok) {
+    return text;
+  }
+
+  if (kind === 'hls') {
+    const playlist = parseHlsPlaylist(text.value, request.manifestUrl);
+    if (playlist.kind === 'refused') {
+      return err(fail(playlist.reason, `stream-${playlist.code}`));
+    }
+    if (playlist.kind !== 'master') {
+      return ok([]);
+    }
+    const renditions = playlist.variants.map(renditionOfVariant);
+    const preferred = selectRendition(renditions, request.selection);
+    return ok(
+      playlist.variants.map((variant, index) =>
+        snapshotOf(renditions[index] ?? { id: variant.url }, 'video', preferred?.id),
+      ),
+    );
+  }
+
+  const manifest = parseDashManifest(text.value, request.manifestUrl);
+  if (manifest.kind === 'refused') {
+    return err(fail(manifest.reason, `stream-${manifest.code}`));
+  }
+  if (manifest.kind === 'dynamic') {
+    return err(fail(manifest.reason, 'stream-dash-dynamic'));
+  }
+  const videoReps = manifest.representations.filter((entry) => entry.contentType === 'video');
+  // Audio-only representations are reported so a surface can show what will be
+  // joined in, but they are not choices: the video track is what quality means here.
+  const choosable = videoReps.length > 0 ? videoReps : manifest.representations;
+  const preferred = selectRendition(choosable.map(renditionOfRepresentation), request.selection);
+  return ok(
+    manifest.representations.map((representation) =>
+      snapshotOf(
+        renditionOfRepresentation(representation),
+        representation.contentType === 'audio' ? 'audio' : 'video',
+        preferred?.id,
+      ),
+    ),
+  );
+}
+
+function snapshotOf(
+  rendition: Rendition,
+  streamKind: 'video' | 'audio',
+  preferredId: string | undefined,
+): StreamRenditionSnapshot {
+  return {
+    id: rendition.id,
+    kind: streamKind,
+    ...(rendition.bandwidth !== undefined && { bandwidth: rendition.bandwidth }),
+    ...(rendition.width !== undefined && { width: rendition.width }),
+    ...(rendition.height !== undefined && { height: rendition.height }),
+    ...(rendition.codecs !== undefined && { codecs: rendition.codecs }),
+    isPreferred: rendition.id === preferredId,
+  };
+}
+
+/**
+ * Resolve a manifest to exactly what assembly would fetch, without fetching any of it.
+ *
+ * Exported so the real-world conformance harness (`tests/live`) drives the SAME
+ * selection and refusal logic a download does, instead of a copy of it that could
+ * drift and validate nothing (§16.9).
+ */
+export async function planStream(
+  request: AssembleRequest,
+): Promise<Result<FetchPlan, StreamAssemblyError>> {
+  const kind = detectStreamKind(request.manifestUrl);
+  if (kind === undefined) {
+    return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
+  }
+  return kind === 'hls' ? planHls(request) : planDash(request);
+}
+
+/**
+ * Turn one track's fetched segments into a fragmented-MP4 track the muxer can join.
+ *
+ * Fragmented-MP4 segments are already in that shape and are used verbatim. MPEG-TS
+ * segments are not tracks at all — audio and video are cut into 188-byte packets — so
+ * they are demultiplexed and re-packaged: the compressed samples are copied unchanged
+ * and only the framing around them is rewritten (§10.6).
+ */
+function trackForSlot(
+  kind: 'video' | 'audio',
+  segments: readonly PlannedSegment[],
+  parts: Uint8Array[],
+): Result<Mp4Track, StreamAssemblyError> {
+  const container = containerFor(segments[0]?.url ?? '');
+  if (container === 'mp4') {
+    return ok(trackFromSegments(parts));
+  }
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const part of parts) {
+    joined.set(part, at);
+    at += part.byteLength;
+  }
+  // The fetched segments are no longer needed once joined; releasing them here keeps
+  // peak memory to the joined stream plus what the remux produces (§12.1).
+  parts.length = 0;
+
+  const demuxed = container === 'aac' ? demuxPackedAudio(joined) : demuxMpegTs(joined);
+  if (!demuxed.ok) {
+    return demuxed;
+  }
+  const track = demuxed.value.tracks.find((candidate) => candidate.kind === kind);
+  if (track === undefined) {
+    return err(
+      fail(
+        `This stream's ${kind} rendition carries no ${kind} track this build can read`,
+        'stream-ts-track-missing',
+      ),
+    );
+  }
+  return writeFragmentedMp4(track, {
+    trackId: 1,
+    // Each rendition is its own file, so each starts at its own first sample. Within
+    // one transport stream the two tracks would share an origin; across two renditions
+    // they can differ by up to a frame, which is stated rather than hidden (§2.8).
+    originTicks90k: (track.samples[0]?.dts ?? 0) * (TS_CLOCK_HZ / track.timescale),
+  });
+}
+
 export async function assembleStream(
   request: AssembleRequest,
 ): Promise<Result<AssembledStream, StreamAssemblyError>> {
@@ -373,7 +564,7 @@ export async function assembleStream(
     return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
   }
 
-  const plan = kind === 'hls' ? await planHls(request) : await planDash(request);
+  const plan = await planStream(request);
   if (!plan.ok) {
     return plan;
   }
@@ -395,13 +586,16 @@ export async function assembleStream(
     if (!fetched.ok) {
       return fetched;
     }
-    const extension = containerFor(plan.value.segments[0]?.url ?? '');
+    const container = containerFor(plan.value.segments[0]?.url ?? '');
+    // A rendition of bare ADTS frames is an audio file; saving it as `.mp4` would name
+    // it something it is not (§10.7).
+    const extension = container === 'aac' ? 'aac' : container;
     return ok({
       kind,
       parts: fetched.value,
       byteLength: state.byteLength,
       extension,
-      mimeType: extension === 'ts' ? 'video/mp2t' : 'video/mp4',
+      mimeType: container === 'ts' ? 'video/mp2t' : container === 'aac' ? 'audio/aac' : 'video/mp4',
       segmentCount: plan.value.segments.length,
       origins: [...state.origins],
     });
@@ -416,10 +610,15 @@ export async function assembleStream(
   if (!audio.ok) {
     return audio;
   }
-  const muxed = muxFragmentedMp4({
-    video: toMp4Track(video.value),
-    audio: toMp4Track(audio.value),
-  });
+  const videoTrack = trackForSlot('video', plan.value.video, video.value);
+  if (!videoTrack.ok) {
+    return videoTrack;
+  }
+  const audioTrack = trackForSlot('audio', plan.value.audio, audio.value);
+  if (!audioTrack.ok) {
+    return audioTrack;
+  }
+  const muxed = muxFragmentedMp4({ video: videoTrack.value, audio: audioTrack.value });
   if (!muxed.ok) {
     return err(muxed.error);
   }
@@ -533,29 +732,4 @@ async function fetchSegments(
     });
   }
   return ok(parts);
-}
-
-/**
- * Turn fetched segments into a track the muxer can read. Each segment is split on its
- * own rather than concatenating the track first: it avoids a second full-size copy,
- * and it handles a segment that carries several fragments.
- */
-function toMp4Track(parts: readonly Uint8Array[]): Mp4Track {
-  const inits: Uint8Array[] = [];
-  const fragments: Uint8Array[] = [];
-  for (const part of parts) {
-    const split = splitFragmentedMp4(part);
-    if (split.init.byteLength > 0) {
-      inits.push(split.init);
-    }
-    fragments.push(...split.fragments);
-  }
-  const initLength = inits.reduce((sum, part) => sum + part.byteLength, 0);
-  const init = new Uint8Array(initLength);
-  let at = 0;
-  for (const part of inits) {
-    init.set(part, at);
-    at += part.byteLength;
-  }
-  return { init, fragments };
 }

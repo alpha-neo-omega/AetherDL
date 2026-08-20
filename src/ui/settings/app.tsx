@@ -13,6 +13,7 @@
  * Public API: SettingsAppProps, SettingsApp.
  */
 import { useMemo, type ReactNode } from 'react';
+import { STREAM_QUALITY_PREFERENCES } from '@shared/constants';
 import type { Settings } from '@shared/types';
 import { Button, StatusView } from '@ui/components';
 import { ThemeProvider, type MediaPreferences } from '@ui/design-system';
@@ -282,6 +283,23 @@ function SettingsSurface(props: SurfaceProps): ReactNode {
             checked={settings.duplicateWarnings}
             onChange={(checked) => {
               set('duplicateWarnings', checked);
+            }}
+          />
+        </section>
+
+        <section className="adl-settings__section" aria-labelledby="adl-streams">
+          <h2 className="adl-settings__heading" id="adl-streams">
+            {t('settings.section.streams')}
+          </h2>
+          <SelectField
+            label={t('settings.streamQuality')}
+            help={t('settings.streamQuality.help')}
+            value={settings.streamQuality}
+            options={STREAM_QUALITY_PREFERENCES.map((preference) =>
+              option(preference, t(`settings.streamQuality.${preference}`)),
+            )}
+            onChange={(value) => {
+              set('streamQuality', value as Settings['streamQuality']);
             }}
           />
         </section>

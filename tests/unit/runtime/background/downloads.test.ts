@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBrowserFrom } from '@platform/browser/factory';
 import { createMessageBus } from '@platform/messaging/service';
 import type { MessageBus } from '@platform/messaging';
+import type { HttpClient, HttpResponse } from '@platform/http';
 import type { StreamDelivery, StreamDeliveryAdapter } from '@platform/stream';
 import type { AppError } from '@shared/result';
-import type { DownloadEventBroadcast, MediaItem } from '@shared/types';
+import { DEFAULT_SETTINGS } from '@core/settings';
+import type { DownloadEventBroadcast, MediaItem, Settings } from '@shared/types';
 import {
   createBackgroundDownloadRuntime,
   createDetectionItemResolver,
@@ -42,6 +44,9 @@ interface SetupOptions {
   readonly start?: boolean;
   /** A stream-delivery adapter, or `null` to run with assembly off. */
   readonly streamDelivery?: StreamDeliveryAdapter | null;
+  /** Answers the one manifest read the quality chooser makes (§10.6). */
+  readonly http?: HttpClient;
+  readonly getSettings?: () => Promise<Settings>;
 }
 
 function setup(options: SetupOptions = {}): Harness {
@@ -59,6 +64,8 @@ function setup(options: SetupOptions = {}): Harness {
     resolver: options.resolver ?? createDetectionItemResolver(detection),
     store,
     ...(options.streamDelivery !== undefined && { streamDelivery: options.streamDelivery }),
+    ...(options.http !== undefined && { http: options.http }),
+    ...(options.getSettings !== undefined && { getSettings: options.getSettings }),
     clock: () => 1000,
     random: () => 0,
     scheduleTimer: timer.schedule,
@@ -813,5 +820,178 @@ describe('background download runtime — host access for stream downloads (§13
     await flush();
 
     expect([...h.fake.grantedOrigins]).toEqual([]);
+  });
+});
+
+describe('runtime/background stream quality chooser (§10.6)', () => {
+  const MASTER = 'https://cdn.test/hls/master.m3u8';
+  const MANIFEST = [
+    '#EXTM3U',
+    '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360',
+    'low.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080',
+    'high.m3u8',
+  ].join('\n');
+
+  function fakeHttp(routes: Readonly<Record<string, string>>): {
+    readonly client: HttpClient;
+    readonly seen: string[];
+  } {
+    const seen: string[] = [];
+    const answer = (url: string): HttpResponse => {
+      seen.push(url);
+      const body = routes[url];
+      if (body === undefined) {
+        throw new Error(`unexpected request: ${url}`);
+      }
+      return {
+        status: 200,
+        ok: true,
+        headers: {},
+        bytes: new TextEncoder().encode(body),
+        url,
+      };
+    };
+    return {
+      seen,
+      client: {
+        get: (url) => Promise.resolve(answer(url)),
+        getText: (url) => Promise.resolve(new TextDecoder().decode(answer(url).bytes)),
+      },
+    };
+  }
+
+  it('lists the renditions a stream offers, reading only the manifest', async () => {
+    const http = fakeHttp({ [MASTER]: MANIFEST });
+    const h = setup({ http: http.client });
+
+    const listed = await h.client.send('stream/qualities', { manifestUrl: MASTER });
+
+    expect(listed.map((rendition) => rendition.height)).toEqual([360, 1080]);
+    // One GET. A chooser that pulled rendition playlists would cost a request per
+    // quality for information the master already carries.
+    expect(http.seen).toEqual([MASTER]);
+  });
+
+  it('marks the rendition the saved preference would take', async () => {
+    const http = fakeHttp({ [MASTER]: MANIFEST });
+    const h = setup({
+      http: http.client,
+      getSettings: () => Promise.resolve({ ...DEFAULT_SETTINGS, streamQuality: '720' }),
+    });
+
+    const listed = await h.client.send('stream/qualities', { manifestUrl: MASTER });
+
+    // The chooser opens on the same answer a plain download would have produced.
+    expect(listed.filter((rendition) => rendition.isPreferred).map((r) => r.height)).toEqual([360]);
+  });
+
+  it('asks for the media host once, at the point of use', async () => {
+    const http = fakeHttp({ [MASTER]: MANIFEST });
+    const h = setup({ http: http.client });
+
+    await h.client.send('stream/qualities', { manifestUrl: MASTER });
+
+    expect([...h.fake.grantedOrigins]).toEqual(['https://cdn.test/*']);
+  });
+
+  it('refuses to read a manifest whose host was declined', async () => {
+    const http = fakeHttp({ [MASTER]: MANIFEST });
+    const h = setup({ http: http.client });
+    h.fake.denyPermissions = true;
+
+    await expect(h.client.send('stream/qualities', { manifestUrl: MASTER })).rejects.toMatchObject({
+      code: 'stream-qualities-host-denied',
+    });
+    // Nothing was read: the refusal comes before the request, not after it.
+    expect(http.seen).toEqual([]);
+  });
+
+  it('rejects a payload with no usable manifest URL', async () => {
+    const h = setup({ http: fakeHttp({}).client });
+
+    await expect(h.client.send('stream/qualities', { manifestUrl: '' })).rejects.toMatchObject({
+      code: 'stream-qualities-invalid',
+    });
+  });
+
+  it('says so plainly when this build cannot read manifests at all', async () => {
+    const h = setup();
+
+    await expect(h.client.send('stream/qualities', { manifestUrl: MASTER })).rejects.toMatchObject({
+      code: 'stream-qualities-unsupported',
+    });
+  });
+
+  it('passes the encryption refusal through untouched, naming no key', async () => {
+    const encrypted = 'https://cdn.test/hls/drm.m3u8';
+    const http = fakeHttp({
+      [encrypted]: [
+        '#EXTM3U',
+        '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="https://keys.test/k"',
+        '#EXTINF:4,',
+        'a.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+    });
+    const h = setup({ http: http.client });
+
+    await expect(
+      h.client.send('stream/qualities', { manifestUrl: encrypted }),
+    ).rejects.toMatchObject({ code: 'stream-hls-encrypted' });
+  });
+
+  /** A delivery adapter that answers instantly; the assembly itself is not the subject here. */
+  function instantDelivery(): StreamDeliveryAdapter {
+    return {
+      supported: true,
+      handles: (url: string) => url.endsWith('.m3u8') || url.endsWith('.mpd'),
+      assemble: (): Promise<StreamDelivery> =>
+        Promise.resolve({
+          url: 'blob:aetherdl/quality',
+          byteLength: 8,
+          extension: 'mp4',
+          mimeType: 'video/mp4',
+          segmentCount: 1,
+          origins: ['https://cdn.test/*'],
+          release: () => Promise.resolve(),
+        }),
+    };
+  }
+
+  it('records the rendition a surface pinned on the queued job', async () => {
+    const h = setup({ streamDelivery: instantDelivery() });
+    const item = mediaItem({ id: MASTER, url: MASTER, kind: 'stream', delivery: 'hls' });
+    h.detect([item]);
+
+    await h.client.send('download/enqueue', {
+      itemIds: [MASTER],
+      renditionId: 'https://cdn.test/hls/low.m3u8',
+    });
+    await flush();
+
+    const queue = (await h.client.send('download/query', undefined)) as readonly {
+      streamRenditionId?: string;
+    }[];
+    expect(queue.map((task) => task.streamRenditionId)).toEqual(['https://cdn.test/hls/low.m3u8']);
+  });
+
+  it('ignores a rendition id that is not a usable string', async () => {
+    const h = setup({ streamDelivery: instantDelivery() });
+    const item = mediaItem({ id: MASTER, url: MASTER, kind: 'stream', delivery: 'hls' });
+    h.detect([item]);
+
+    // Untrusted payload (§13.8): a hostile or broken caller must not be able to park
+    // an unbounded value on a persisted task.
+    await h.client.send('download/enqueue', {
+      itemIds: [MASTER],
+      renditionId: 'x'.repeat(5000),
+    });
+    await flush();
+
+    const queue = (await h.client.send('download/query', undefined)) as readonly {
+      streamRenditionId?: string;
+    }[];
+    expect(queue.map((task) => task.streamRenditionId)).toEqual([undefined]);
   });
 });
