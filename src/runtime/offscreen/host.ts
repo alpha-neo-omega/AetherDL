@@ -84,6 +84,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
   const held = new Map<string, StreamDelivery>();
   const running = new Map<string, AbortController>();
   const unsubscribes: Unsubscribe[] = [];
+  let started = false;
 
   const assemble = async (payload: unknown): Promise<StreamAssembleResult> => {
     const request = readRequest(payload);
@@ -136,6 +137,12 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
 
   return {
     start(): void {
+      // Idempotent, like every other surface: registering twice is a wiring error the
+      // message bus now refuses outright.
+      if (started) {
+        return;
+      }
+      started = true;
       unsubscribes.push(
         // Registered FIRST: it is what tells the service worker this context is
         // listening at all (see `stream/ready`).
@@ -162,6 +169,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
       for (const unsubscribe of unsubscribes.splice(0)) {
         unsubscribe();
       }
+      started = false;
     },
   };
 }

@@ -277,3 +277,17 @@ describe('offscreen assembly host', () => {
     expect(h.unsubscribed()).toBe(4);
   });
 });
+
+describe('offscreen host: starting twice', () => {
+  it('is idempotent, rather than claiming its messages a second time', () => {
+    // The bus refuses a duplicate handler, so a surface that can be started twice
+    // would throw on the second call instead of simply being already started.
+    const h = harness();
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+
+    host.start();
+    expect(() => {
+      host.start();
+    }).not.toThrow();
+  });
+});

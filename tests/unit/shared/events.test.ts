@@ -117,3 +117,61 @@ describe('shared/utils createMultiplexer', () => {
     expect(mux.size).toBe(0);
   });
 });
+
+describe('TypedEventEmitter: one subscriber cannot break the others (§20.7)', () => {
+  // With no owner listening the failure is rethrown on a later microtask, where it
+  // reaches the context's own error reporting. That path is deliberately not asserted
+  // here: a rethrow from a microtask surfaces as an unhandled error in the runner,
+  // and a test that "proves" it would only be proving its own plumbing.
+
+  it('delivers to every listener even when one throws', () => {
+    // Regression: the throw aborted the dispatch, so later listeners were skipped,
+    // and it unwound into whatever emitted — in the download manager that meant the
+    // scheduler's next step never ran and the queue stalled.
+    const emitter = new TypedEventEmitter<{ tick: [number] }>();
+    const before = vi.fn();
+    const after = vi.fn();
+    emitter.on('tick', before);
+    emitter.on('tick', () => {
+      throw new Error('subscriber blew up');
+    });
+    emitter.on('tick', after);
+
+    expect(() => {
+      emitter.emit('tick', 1);
+    }).not.toThrow();
+    expect(before).toHaveBeenCalledWith(1);
+    expect(after).toHaveBeenCalledWith(1);
+  });
+
+  it('reports the failure to the owner rather than swallowing it', () => {
+    const onListenerError = vi.fn();
+    const emitter = new TypedEventEmitter<{ tick: [] }>({ onListenerError });
+    const failure = new Error('subscriber blew up');
+    emitter.on('tick', () => {
+      throw failure;
+    });
+
+    emitter.emit('tick');
+
+    expect(onListenerError).toHaveBeenCalledWith(failure, 'tick');
+  });
+
+  it('keeps dispatching when the reporter itself throws', () => {
+    const after = vi.fn();
+    const emitter = new TypedEventEmitter<{ tick: [] }>({
+      onListenerError: () => {
+        throw new Error('the reporter blew up too');
+      },
+    });
+    emitter.on('tick', () => {
+      throw new Error('subscriber blew up');
+    });
+    emitter.on('tick', after);
+
+    expect(() => {
+      emitter.emit('tick');
+    }).not.toThrow();
+    expect(after).toHaveBeenCalled();
+  });
+});

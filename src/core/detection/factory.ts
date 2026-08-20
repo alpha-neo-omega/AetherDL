@@ -52,7 +52,28 @@ export function createDetectionEngine(options: DetectionEngineOptions = {}): Det
   const perDetectorTimeoutMs = options.perDetectorTimeoutMs ?? 250;
   const maxCandidatesPerDetector = options.maxCandidatesPerDetector ?? 200;
 
-  const emitter = new TypedEventEmitter<DetectionEventMap>();
+  // A subscriber that throws is reported on the engine's own error stream, and the
+  // guard keeps a throwing `error` listener from reporting itself forever (§20.7).
+  let reportingListenerError = false;
+  const emitter = new TypedEventEmitter<DetectionEventMap>({
+    onListenerError: (cause, event) => {
+      if (reportingListenerError) {
+        return;
+      }
+      reportingListenerError = true;
+      try {
+        emitter.emit('error', {
+          category: 'internal',
+          code: `detection-listener-failed-${event}`,
+          messageKey: 'error.detection.internal',
+          retryable: false,
+          cause,
+        });
+      } finally {
+        reportingListenerError = false;
+      }
+    },
+  });
   const scorer = createScorer();
   const metadataExtractor = createMetadataExtractor();
 

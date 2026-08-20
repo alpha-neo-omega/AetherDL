@@ -84,7 +84,23 @@ const SCHEDULABLE: ReadonlySet<TaskState> = new Set<TaskState>([
 
 export function createDownloadManager(deps: DownloadManagerDeps): DownloadManager {
   const { downloads, queue, concurrency, retryPolicy, filename, progress, clock } = deps;
-  const emitter = new TypedEventEmitter<DownloadEventMap>();
+  // A subscriber that throws is reported on the manager's own error stream rather
+  // than left to a global handler, and the guard stops a throwing `error` listener
+  // from reporting itself forever (§20.7).
+  let reportingListenerError = false;
+  const emitter = new TypedEventEmitter<DownloadEventMap>({
+    onListenerError: (cause, event) => {
+      if (reportingListenerError) {
+        return;
+      }
+      reportingListenerError = true;
+      try {
+        emitError(`download-listener-failed-${event}`, cause);
+      } finally {
+        reportingListenerError = false;
+      }
+    },
+  });
   const generateId = deps.generateId ?? ((): string => crypto.randomUUID());
   const scheduleTimer =
     deps.scheduleTimer ??

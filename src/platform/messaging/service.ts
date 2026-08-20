@@ -230,6 +230,17 @@ export function createMessageBus(api: WebExtApi): MessageBus {
     on<T extends MessageType>(type: T, handler: MessageHandler<T>): Unsubscribe {
       ensureListener();
       const entry = handler as (request: unknown) => unknown | Promise<unknown>;
+      // One responder per type per context (§8.5). A second registration used to
+      // replace the first in silence, so a wiring mistake — two runtimes claiming the
+      // same message, or a surface started twice — left a handler that would never be
+      // called again and no sign of it anywhere.
+      if (handlers.has(type)) {
+        throw new MessagingError(`A handler for "${type}" is already registered`, {
+          code: 'messaging-duplicate-handler',
+          messageKey: 'error.messaging.handler',
+          context: { type },
+        });
+      }
       handlers.set(type, entry);
       return () => {
         if (handlers.get(type) === entry) {

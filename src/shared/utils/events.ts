@@ -7,7 +7,7 @@
  * Restrictions: Leaf layer — no internal dependencies, no side effects at import
  *          (§8.16). Pure in-memory state owned by each instance.
  * Dependencies: none.
- * Public API: Unsubscribe, EventArgs, TypedEventEmitter.
+ * Public API: Unsubscribe, EventArgs, TypedEventEmitterOptions, TypedEventEmitter.
  */
 
 /** Function returned by subscriptions to detach the listener. */
@@ -18,6 +18,16 @@ export type EventArgs = Record<string, readonly unknown[]>;
 
 type AnyListener = (...args: readonly unknown[]) => void;
 
+export interface TypedEventEmitterOptions {
+  /**
+   * Called when a listener throws. The emitter itself has no error taxonomy — it is a
+   * leaf — so the owner decides where the failure goes. Omitted, the failure is
+   * rethrown on a later microtask: visible to the context's error reporting, and
+   * unable to interfere with the dispatch that is still in progress.
+   */
+  readonly onListenerError?: (error: unknown, event: string) => void;
+}
+
 /**
  * A typed event emitter. `M` maps event names to their argument tuples.
  *
@@ -27,6 +37,8 @@ type AnyListener = (...args: readonly unknown[]) => void;
  */
 export class TypedEventEmitter<M extends EventArgs> {
   private readonly listeners = new Map<keyof M, Set<AnyListener>>();
+
+  constructor(private readonly options: TypedEventEmitterOptions = {}) {}
 
   /** Subscribe to an event. Returns an unsubscribe function. */
   on<K extends keyof M>(event: K, listener: (...args: M[K]) => void): Unsubscribe {
@@ -63,7 +75,14 @@ export class TypedEventEmitter<M extends EventArgs> {
     }
   }
 
-  /** Emit an event to all current listeners. */
+  /**
+   * Emit an event to all current listeners.
+   *
+   * Every listener is isolated. One subscriber that throws used to abort the dispatch
+   * — every later listener was skipped — and the throw unwound into whatever emitted
+   * the event, which in the download manager meant the scheduler's next step never
+   * ran and the queue stalled. A subscriber's failure is its own (§20.7).
+   */
   emit<K extends keyof M>(event: K, ...args: M[K]): void {
     const set = this.listeners.get(event);
     if (set === undefined) {
@@ -71,7 +90,27 @@ export class TypedEventEmitter<M extends EventArgs> {
     }
     // Snapshot so listeners that unsubscribe during dispatch don't skip peers.
     for (const listener of [...set]) {
-      (listener as (...a: M[K]) => void)(...args);
+      try {
+        (listener as (...a: M[K]) => void)(...args);
+      } catch (error) {
+        this.reportListenerError(error, String(event));
+      }
+    }
+  }
+
+  private reportListenerError(error: unknown, event: string): void {
+    const handler = this.options.onListenerError;
+    if (handler === undefined) {
+      // Not swallowed: surfaced on a later microtask, where it cannot break dispatch.
+      queueMicrotask(() => {
+        throw error;
+      });
+      return;
+    }
+    try {
+      handler(error, event);
+    } catch {
+      // A reporter that throws does not get to break dispatch either.
     }
   }
 
