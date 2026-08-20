@@ -18,6 +18,9 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.mp3': 'audio/mpeg',
   '.css': 'text/css',
   '.js': 'text/javascript',
+  // The committed split-track HLS fixture (see make-stream-fixtures.ts).
+  '.m3u8': 'application/vnd.apple.mpegurl',
+  '.m4s': 'video/iso.segment',
 };
 
 /**
@@ -110,12 +113,28 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
       response.end(Buffer.alloc(HLS_SEGMENT_BYTES, index));
       return;
     }
-    // A master playlist whose audio is a separate rendition: assembling the video
-    // variant alone would produce silent video, so it must be refused (§10.6).
+    // A master playlist whose audio is a separate MPEG-TS rendition. Joining those
+    // would mean demuxing and re-packaging, which this project does not do, so it must
+    // be refused rather than saved as a silent video (§10.6). The fragmented-MP4 case
+    // IS joined — see `site/media/split/master.m3u8`.
+    if (requested === '/media/hls/audio-en.m3u8') {
+      const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:4'];
+      for (let index = 1; index <= HLS_SEGMENT_COUNT; index += 1) {
+        lines.push('#EXTINF:4.000,', `seg-${String(index)}.ts`);
+      }
+      lines.push('#EXT-X-ENDLIST', '');
+      const body = lines.join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
     if (requested === '/media/hls/split-audio.m3u8') {
       const body = [
         '#EXTM3U',
-        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio-en.m3u8"',
         '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="aac"',
         'index.m3u8',
         '',

@@ -26,7 +26,12 @@ import {
   type DashRepresentation,
   type DashSegment,
 } from '@core/download/stream/dash';
-import { parseHlsPlaylist, type HlsSegment } from '@core/download/stream/hls';
+import {
+  parseHlsPlaylist,
+  type HlsAudioRendition,
+  type HlsSegment,
+} from '@core/download/stream/hls';
+import { muxFragmentedMp4, splitFragmentedMp4, type Mp4Track } from '@core/download/stream/mux';
 
 /**
  * Assembly holds the finished media in memory before handing it to the browser, so
@@ -117,12 +122,32 @@ function containerFor(segmentUrl: string): 'ts' | 'mp4' {
   return extension === 'ts' || extension === 'm2ts' || extension === 'mts' ? 'ts' : 'mp4';
 }
 
-interface FetchPlan {
-  readonly kind: StreamKind;
-  readonly segments: readonly {
-    readonly url: string;
-    readonly range?: { readonly offset: number; readonly length: number };
-  }[];
+interface PlannedSegment {
+  readonly url: string;
+  readonly range?: { readonly offset: number; readonly length: number };
+}
+
+/**
+ * What to fetch. `single` is one track already carrying both picture and sound;
+ * `muxed` is a video track and an audio track that have to be joined into one file,
+ * which is how most real DASH — and much HLS — is packaged (§10.6).
+ */
+type FetchPlan =
+  | {
+      readonly kind: StreamKind;
+      readonly mode: 'single';
+      readonly segments: readonly PlannedSegment[];
+    }
+  | {
+      readonly kind: StreamKind;
+      readonly mode: 'muxed';
+      readonly video: readonly PlannedSegment[];
+      readonly audio: readonly PlannedSegment[];
+    };
+
+/** Every segment a plan will fetch, in fetch order. */
+function plannedSegments(plan: FetchPlan): readonly PlannedSegment[] {
+  return plan.mode === 'single' ? plan.segments : [...plan.video, ...plan.audio];
 }
 
 /**
@@ -154,6 +179,55 @@ async function fetchText(
   }
 }
 
+/** Read one HLS media playlist into the segments it names, init segment first. */
+async function planHlsMedia(
+  request: AssembleRequest,
+  url: string,
+): Promise<Result<readonly PlannedSegment[], StreamAssemblyError>> {
+  const text = await fetchText(request.http, url, request.signal);
+  if (!text.ok) {
+    return text;
+  }
+  const playlist = parseHlsPlaylist(text.value, url);
+  if (playlist.kind === 'refused') {
+    return err(fail(playlist.reason, `stream-${playlist.code}`));
+  }
+  if (playlist.kind === 'master') {
+    return err(fail('A rendition pointed at another master playlist', 'stream-hls-nested-master'));
+  }
+  if (playlist.live) {
+    return err(fail('Live streams have no end to download', 'stream-hls-live'));
+  }
+  const segments: HlsSegment[] = [
+    ...(playlist.initSegment !== undefined ? [playlist.initSegment] : []),
+    ...playlist.segments,
+  ];
+  return ok(
+    segments.map((segment) => ({
+      url: segment.url,
+      ...(segment.range !== undefined && { range: segment.range }),
+    })),
+  );
+}
+
+/**
+ * Whether a track's segments are fragmented MP4, which is what muxing needs. MPEG-TS
+ * renditions would have to be demuxed and re-packaged — a different job, not started
+ * here — so a TS stream with separate audio stays refused rather than half-supported.
+ */
+function isFragmentedTrack(segments: readonly PlannedSegment[]): boolean {
+  return segments.every((segment) => containerFor(segment.url) === 'mp4');
+}
+
+/** The audio rendition to pair with a variant: its own group, default first. */
+function chooseAudio(
+  renditions: readonly HlsAudioRendition[],
+  group: string | undefined,
+): HlsAudioRendition | undefined {
+  const candidates = group === undefined ? renditions : renditions.filter((r) => r.group === group);
+  return candidates.find((rendition) => rendition.isDefault) ?? candidates[0];
+}
+
 /** Resolve an HLS URL to a concrete segment list, following ONE master playlist. */
 async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, StreamAssemblyError>> {
   const { http, manifestUrl, signal } = request;
@@ -177,23 +251,50 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
       if (best === undefined) {
         return err(fail('Master playlist lists no usable variant', 'stream-hls-no-variant'));
       }
-      // A variant whose audio lives in its own rendition carries video only. Joining
-      // the two tracks is muxing, which this project does not do, so the stream is
-      // refused rather than saved as a video with no sound (§10.6).
+      // A variant whose audio lives in its own rendition carries video only. Both
+      // tracks are fetched and joined into one file; saving the video track alone
+      // would be a silent video (§10.6).
       const audioIsSeparate =
         best.audioGroup !== undefined
           ? playlist.separateAudioGroups.includes(best.audioGroup)
           : playlist.separateAudioGroups.length > 0;
-      if (audioIsSeparate) {
+      if (!audioIsSeparate) {
+        url = best.url;
+        continue;
+      }
+      const rendition = chooseAudio(playlist.audioRenditions, best.audioGroup);
+      if (rendition === undefined) {
         return err(
           fail(
-            'This stream keeps its audio in a separate track, which cannot be joined into one file',
+            'This stream names a separate audio track it does not provide',
             'stream-hls-separate-audio',
           ),
         );
       }
-      url = best.url;
-      continue;
+      const videoSegments = await planHlsMedia(request, best.url);
+      if (!videoSegments.ok) {
+        return videoSegments;
+      }
+      const audioSegments = await planHlsMedia(request, rendition.url);
+      if (!audioSegments.ok) {
+        return audioSegments;
+      }
+      if (!isFragmentedTrack(videoSegments.value) || !isFragmentedTrack(audioSegments.value)) {
+        // MPEG-TS renditions would have to be demuxed and re-packaged, which this
+        // project does not do. Refused, with the reason, rather than saved silent.
+        return err(
+          fail(
+            'This stream keeps its audio in a separate MPEG-TS track, which cannot be joined into one file',
+            'stream-hls-separate-audio',
+          ),
+        );
+      }
+      return ok({
+        kind: 'hls',
+        mode: 'muxed',
+        video: videoSegments.value,
+        audio: audioSegments.value,
+      });
     }
     if (playlist.live) {
       return err(fail('Live streams have no end to download', 'stream-hls-live'));
@@ -204,6 +305,7 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
     ];
     return ok({
       kind: 'hls',
+      mode: 'single',
       segments: segments.map((segment) => ({
         url: segment.url,
         ...(segment.range !== undefined && { range: segment.range }),
@@ -231,40 +333,36 @@ async function planDash(request: AssembleRequest): Promise<Result<FetchPlan, Str
     return err(fail('Manifest lists no usable representation', 'stream-dash-no-representation'));
   }
   // Video in one AdaptationSet and audio in another means no single representation
-  // holds both, so assembling one of them yields silent video (or audio with no
-  // picture). Refuse and say so, rather than hand over a file that looks right (§10.6).
-  const kinds = new Set(
-    manifest.representations.map((entry) => entry.contentType).filter((type) => type !== undefined),
-  );
-  const setsOfChosenKind = new Set(
-    manifest.representations
-      .filter((entry) => entry.contentType === representation.contentType)
-      .map((entry) => entry.setIndex),
-  );
-  const otherSets = new Set(
-    manifest.representations
-      .filter((entry) => !setsOfChosenKind.has(entry.setIndex))
-      .map((entry) => entry.setIndex),
-  );
-  if (kinds.has('video') && kinds.has('audio') && otherSets.size > 0) {
-    return err(
-      fail(
-        'This stream keeps its audio and video in separate tracks, which cannot be joined into one file',
-        'stream-dash-separate-audio',
-      ),
-    );
+  // holds both, so saving one of them alone would be a silent video. Both are fetched
+  // and joined into one file instead (§10.6).
+  const best = (kind: 'video' | 'audio'): DashRepresentation | undefined =>
+    [...manifest.representations]
+      .filter((entry) => entry.contentType === kind)
+      .sort((left, right) => (right.bandwidth ?? 0) - (left.bandwidth ?? 0))[0];
+  const video = best('video');
+  const audio = best('audio');
+
+  if (video !== undefined && audio !== undefined && video.setIndex !== audio.setIndex) {
+    return ok({
+      kind: 'dash',
+      mode: 'muxed',
+      video: segmentsOf(video),
+      audio: segmentsOf(audio),
+    });
   }
+  return ok({ kind: 'dash', mode: 'single', segments: segmentsOf(representation) });
+}
+
+/** A representation's segments, its initialisation segment first. */
+function segmentsOf(representation: DashRepresentation): readonly PlannedSegment[] {
   const segments: DashSegment[] = [
     ...(representation.initSegment !== undefined ? [representation.initSegment] : []),
     ...representation.segments,
   ];
-  return ok({
-    kind: 'dash',
-    segments: segments.map((segment) => ({
-      url: segment.url,
-      ...(segment.range !== undefined && { range: segment.range }),
-    })),
-  });
+  return segments.map((segment) => ({
+    url: segment.url,
+    ...(segment.range !== undefined && { range: segment.range }),
+  }));
 }
 
 export async function assembleStream(
@@ -279,21 +377,89 @@ export async function assembleStream(
   if (!plan.ok) {
     return plan;
   }
-  const segments = plan.value.segments;
-  if (segments.length === 0) {
+  const all = plannedSegments(plan.value);
+  if (all.length === 0) {
     return err(fail('Manifest resolved to no segments', 'stream-empty'));
   }
 
-  const ceiling = request.maxTotalBytes ?? STREAM_MAX_TOTAL_BYTES;
+  const state: FetchState = {
+    ceiling: request.maxTotalBytes ?? STREAM_MAX_TOTAL_BYTES,
+    byteLength: 0,
+    origins: new Set<string>(),
+    done: 0,
+    total: all.length,
+  };
+
+  if (plan.value.mode === 'single') {
+    const fetched = await fetchSegments(request, plan.value.segments, state);
+    if (!fetched.ok) {
+      return fetched;
+    }
+    const extension = containerFor(plan.value.segments[0]?.url ?? '');
+    return ok({
+      kind,
+      parts: fetched.value,
+      byteLength: state.byteLength,
+      extension,
+      mimeType: extension === 'ts' ? 'video/mp2t' : 'video/mp4',
+      segmentCount: plan.value.segments.length,
+      origins: [...state.origins],
+    });
+  }
+
+  // Two tracks: video first, then audio, then joined into one file.
+  const video = await fetchSegments(request, plan.value.video, state);
+  if (!video.ok) {
+    return video;
+  }
+  const audio = await fetchSegments(request, plan.value.audio, state);
+  if (!audio.ok) {
+    return audio;
+  }
+  const muxed = muxFragmentedMp4({
+    video: toMp4Track(video.value),
+    audio: toMp4Track(audio.value),
+  });
+  if (!muxed.ok) {
+    return err(muxed.error);
+  }
+  const byteLength = muxed.value.reduce((sum, part) => sum + part.byteLength, 0);
+  return ok({
+    kind,
+    parts: muxed.value,
+    byteLength,
+    extension: 'mp4',
+    mimeType: 'video/mp4',
+    segmentCount: plan.value.video.length + plan.value.audio.length,
+    origins: [...state.origins],
+  });
+}
+
+interface FetchState {
+  readonly ceiling: number;
+  byteLength: number;
+  readonly origins: Set<string>;
+  /** Segments fetched so far across every track, for one honest progress count. */
+  done: number;
+  readonly total: number;
+}
+
+/**
+ * Fetch one track's segments, in order.
+ *
+ * Sequential on purpose: playlist order IS the file order, and one transfer at a time
+ * keeps peak memory to a single segment plus what has been kept (§12.1).
+ */
+async function fetchSegments(
+  request: AssembleRequest,
+  segments: readonly PlannedSegment[],
+  state: FetchState,
+): Promise<Result<Uint8Array[], StreamAssemblyError>> {
   // Read through a call: the flag flips DURING the awaits below, which narrowing
   // cannot know.
   const aborted = (): boolean => request.signal?.aborted === true;
   const parts: Uint8Array[] = [];
-  const origins = new Set<string>();
-  let byteLength = 0;
 
-  // Sequential on purpose: playlist order IS the file order, and one transfer at a
-  // time keeps peak memory to a single segment plus what has been kept (§12.1).
   for (const [index, segment] of segments.entries()) {
     if (aborted()) {
       return err(fail('Assembly was cancelled', 'stream-aborted'));
@@ -348,8 +514,8 @@ export async function assembleStream(
     if (aborted()) {
       return err(fail('Assembly was cancelled', 'stream-aborted'));
     }
-    byteLength += received.byteLength;
-    if (byteLength > ceiling) {
+    state.byteLength += received.byteLength;
+    if (state.byteLength > state.ceiling) {
       return err(
         fail('Stream is larger than the accepted ceiling for assembly', 'stream-too-large'),
       );
@@ -357,23 +523,39 @@ export async function assembleStream(
     parts.push(received);
     const origin = originOf(finalUrl);
     if (origin !== undefined) {
-      origins.add(origin);
+      state.origins.add(origin);
     }
+    state.done += 1;
     request.onProgress?.({
-      segmentsDone: index + 1,
-      segmentsTotal: segments.length,
-      bytesReceived: byteLength,
+      segmentsDone: state.done,
+      segmentsTotal: state.total,
+      bytesReceived: state.byteLength,
     });
   }
+  return ok(parts);
+}
 
-  const extension = containerFor(segments[0]?.url ?? '');
-  return ok({
-    kind,
-    parts,
-    byteLength,
-    extension,
-    mimeType: extension === 'ts' ? 'video/mp2t' : 'video/mp4',
-    segmentCount: segments.length,
-    origins: [...origins],
-  });
+/**
+ * Turn fetched segments into a track the muxer can read. Each segment is split on its
+ * own rather than concatenating the track first: it avoids a second full-size copy,
+ * and it handles a segment that carries several fragments.
+ */
+function toMp4Track(parts: readonly Uint8Array[]): Mp4Track {
+  const inits: Uint8Array[] = [];
+  const fragments: Uint8Array[] = [];
+  for (const part of parts) {
+    const split = splitFragmentedMp4(part);
+    if (split.init.byteLength > 0) {
+      inits.push(split.init);
+    }
+    fragments.push(...split.fragments);
+  }
+  const initLength = inits.reduce((sum, part) => sum + part.byteLength, 0);
+  const init = new Uint8Array(initLength);
+  let at = 0;
+  for (const part of inits) {
+    init.set(part, at);
+    at += part.byteLength;
+  }
+  return { init, fragments };
 }

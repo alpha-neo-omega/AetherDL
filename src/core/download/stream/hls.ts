@@ -48,12 +48,22 @@ export interface HlsVariant {
  * What a playlist turned out to be. `refused` carries the reason in `reason` and is
  * the only outcome for encrypted content.
  */
+/** An audio rendition that lives in its own playlist, and can therefore be muxed. */
+export interface HlsAudioRendition {
+  readonly group: string;
+  readonly url: string;
+  readonly name?: string;
+  readonly isDefault: boolean;
+}
+
 export type HlsPlaylist =
   | {
       readonly kind: 'master';
       readonly variants: readonly HlsVariant[];
       /** `AUDIO` group ids whose renditions live in their own playlist. */
       readonly separateAudioGroups: readonly string[];
+      /** Those renditions, resolved, so the caller can fetch and mux one. */
+      readonly audioRenditions: readonly HlsAudioRendition[];
     }
   | {
       readonly kind: 'media';
@@ -173,6 +183,7 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
 
   const variants: HlsVariant[] = [];
   const separateAudioGroups = new Set<string>();
+  const audioRenditions: HlsAudioRendition[] = [];
   const segments: HlsSegment[] = [];
   let live = true;
   let targetDurationSec: number | undefined;
@@ -204,6 +215,15 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
       const group = attributes['GROUP-ID'];
       if (type === 'AUDIO' && group !== undefined && attributes['URI'] !== undefined) {
         separateAudioGroups.add(group);
+        const renditionUrl = resolve(attributes['URI'], manifestUrl);
+        if (renditionUrl !== undefined) {
+          audioRenditions.push({
+            group,
+            url: renditionUrl,
+            ...(attributes['NAME'] !== undefined && { name: attributes['NAME'] }),
+            isDefault: (attributes['DEFAULT'] ?? '').trim().toUpperCase() === 'YES',
+          });
+        }
       }
       continue;
     }
@@ -290,7 +310,12 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
   }
 
   if (variants.length > 0) {
-    return { kind: 'master', variants, separateAudioGroups: [...separateAudioGroups] };
+    return {
+      kind: 'master',
+      variants,
+      separateAudioGroups: [...separateAudioGroups],
+      audioRenditions,
+    };
   }
   if (segments.length === 0) {
     return refused('Playlist lists no segments', 'hls-empty');

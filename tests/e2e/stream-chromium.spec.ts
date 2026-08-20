@@ -20,6 +20,7 @@ import type { DownloadTask, MediaItem } from '../../src/shared/types';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { muxFragmentedMp4, splitFragmentedMp4 } from '../../src/core/download/stream/mux';
 import {
   distDir,
   loadChromiumExtension,
@@ -30,6 +31,7 @@ import {
 import {
   HLS_SEGMENT_COUNT,
   HLS_TOTAL_BYTES,
+  SITE_ROOT,
   startFixtureSite,
   type FixtureSite,
 } from './_fixtures/server';
@@ -39,6 +41,27 @@ interface NativeDownload {
   readonly bytes: number;
   readonly url: string;
   readonly filename: string;
+}
+
+/**
+ * What the muxer produces from the committed split-track fixtures, computed here so the
+ * browser's result is compared against an independent calculation rather than itself.
+ */
+function expectedMuxedBytes(): number {
+  const dir = join(SITE_ROOT, 'media', 'split');
+  const read = (name: string): Uint8Array => new Uint8Array(readFileSync(join(dir, name)));
+  const track = (prefix: string, fragments: number): ReturnType<typeof splitFragmentedMp4> => {
+    const init = splitFragmentedMp4(read(`${prefix}-init.mp4`));
+    const parts = Array.from({ length: fragments }, (_unused, index) =>
+      splitFragmentedMp4(read(`${prefix}-${String(index + 1)}.m4s`)),
+    );
+    return { init: init.init, fragments: parts.flatMap((part) => part.fragments) };
+  };
+  const result = muxFragmentedMp4({ video: track('v', 2), audio: track('a', 2) });
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value.reduce((sum, part) => sum + part.byteLength, 0);
 }
 
 test.describe('AetherDL assembles a non-DRM HLS stream in Chromium', () => {
@@ -215,7 +238,7 @@ test.describe('AetherDL assembles a non-DRM HLS stream in Chromium', () => {
     await popup.close();
   });
 
-  test('refuses a stream whose audio is a separate track, and says why', async () => {
+  test('refuses a split-track stream whose renditions are MPEG-TS, and says why', async () => {
     const popup = await extension.page('popup.html');
     const items = await sendMessage<readonly MediaItem[]>(popup, {
       type: 'detection/run',
@@ -261,6 +284,72 @@ test.describe('AetherDL assembles a non-DRM HLS stream in Chromium', () => {
       chrome.downloads.search({}).then((found) => found.length),
     );
     expect(after).toBe(before);
+    await popup.close();
+  });
+
+  test('joins a split-track stream into one file, byte for byte', async () => {
+    // The packaging that used to be refused: h264 in one rendition, aac in another,
+    // both fragmented MP4. The extension must fetch both and mux them.
+    const popup = await extension.page('popup.html');
+    const items = await sendMessage<readonly MediaItem[]>(popup, {
+      type: 'detection/run',
+      payload: {
+        pageUrl: `${site.origin}/with-media.html`,
+        domSignals: [
+          {
+            role: 'video',
+            tagName: 'VIDEO',
+            src: `${site.origin}/media/split/master.m3u8`,
+            width: 160,
+            height: 120,
+          },
+        ],
+        observedUrls: [],
+      },
+    });
+    const stream = items.find((item) => item.url.endsWith('split/master.m3u8'));
+    expect(stream).toBeDefined();
+
+    await sendMessage(popup, {
+      type: 'download/enqueue',
+      payload: { itemIds: [stream?.id ?? ''] },
+    });
+
+    const downloads = await until(
+      'the joined stream to be saved',
+      () =>
+        extension.worker.evaluate(() =>
+          chrome.downloads.search({}).then((found) =>
+            found.map((item) => ({
+              state: item.state,
+              bytes: item.bytesReceived,
+              url: item.url,
+              filename: item.filename,
+            })),
+          ),
+        ),
+      (found: readonly NativeDownload[]) =>
+        found.some(
+          (item) =>
+            item.state === 'complete' &&
+            item.url.startsWith('blob:') &&
+            item.bytes === expectedMuxedBytes(),
+        ),
+      60_000,
+    );
+
+    const completed = downloads.find(
+      (item) => item.state === 'complete' && item.bytes === expectedMuxedBytes(),
+    );
+    // The browser saved exactly the bytes the muxer produces from these fixtures,
+    // computed here independently of the extension.
+    expect(completed?.bytes).toBe(expectedMuxedBytes());
+
+    const queue = await sendMessage<readonly DownloadTask[]>(popup, { type: 'download/query' });
+    const task = queue.find((entry) => entry.item.url.endsWith('split/master.m3u8'));
+    expect(task?.state).toBe('completed');
+    // A joined stream is an MP4, whatever the playlist was called.
+    expect(task?.filename.endsWith('.mp4')).toBe(true);
     await popup.close();
   });
 

@@ -7,6 +7,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { HttpError, NetworkError } from '@shared/result/errors';
 import type { HttpClient, HttpRequestOptions, HttpResponse } from '@platform/http';
 import {
+  bytesOf,
+  fragment,
+  initSegment,
+  joinBytes,
+  readBoxes,
+  sequencesOf,
+  trackIdsOf,
+} from './_fmp4';
+import {
   assembleStream,
   detectStreamKind,
   streamOriginsFor,
@@ -291,8 +300,10 @@ describe('assembleStream: DASH', () => {
   });
 });
 
-describe('assembleStream: streams whose audio is a separate track', () => {
-  it('refuses an HLS master whose chosen variant has no audio of its own', async () => {
+describe('assembleStream: streams whose audio is a separate track (§10.6)', () => {
+  it('fetches both HLS tracks and joins them into one file', async () => {
+    // 1.1.0 saved the video track alone — a silent video. 1.2.0 refused it. Now both
+    // tracks are fetched and muxed.
     const master = 'https://cdn.test/hls/master.m3u8';
     const seen: string[] = [];
     const http = stubHttp(
@@ -303,9 +314,72 @@ describe('assembleStream: streams whose audio is a separate track', () => {
           '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="aac"',
           'video/720.m3u8',
         ].join('\n'),
+        'https://cdn.test/hls/video/720.m3u8': [
+          '#EXTM3U',
+          '#EXT-X-MAP:URI="init.mp4"',
+          '#EXTINF:4,',
+          'v1.m4s',
+          '#EXT-X-ENDLIST',
+        ].join('\n'),
+        'https://cdn.test/hls/audio/en.m3u8': [
+          '#EXTM3U',
+          '#EXT-X-MAP:URI="init.mp4"',
+          '#EXTINF:4,',
+          'a1.m4s',
+          '#EXT-X-ENDLIST',
+        ].join('\n'),
+        'https://cdn.test/hls/video/init.mp4': initSegment(1),
+        'https://cdn.test/hls/video/v1.m4s': fragment(1, 1, bytesOf(0xaa)),
+        'https://cdn.test/hls/audio/init.mp4': initSegment(1),
+        'https://cdn.test/hls/audio/a1.m4s': fragment(1, 1, bytesOf(0xbb)),
       },
       (url) => seen.push(url),
     );
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // Both playlists were read and both tracks fetched.
+    expect(seen).toContain('https://cdn.test/hls/video/720.m3u8');
+    expect(seen).toContain('https://cdn.test/hls/audio/en.m3u8');
+    expect(seen).toContain('https://cdn.test/hls/audio/a1.m4s');
+
+    const file = joinBytes(...result.value.parts);
+    expect(result.value.extension).toBe('mp4');
+    // One movie header, and a fragment from each track with distinct ids.
+    expect(readBoxes(file).filter((entry) => entry.type === 'moov')).toHaveLength(1);
+    expect(trackIdsOf(file)).toEqual([1, 2]);
+  });
+
+  it('refuses a split-track stream whose renditions are MPEG-TS', async () => {
+    // Joining those would mean demuxing and re-packaging, which this project does not
+    // do — so it is refused with a reason rather than saved as a silent video.
+    const master = 'https://cdn.test/hls/master.m3u8';
+    const http = stubHttp({
+      [master]: [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aac"',
+        'video/720.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/video/720.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'v1.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/audio/en.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'a1.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/video/v1.ts': bytesOf(1, 2, 3),
+      'https://cdn.test/hls/audio/a1.ts': bytesOf(4, 5, 6),
+    });
 
     const result = await assembleStream({ manifestUrl: master, http });
 
@@ -314,9 +388,8 @@ describe('assembleStream: streams whose audio is a separate track', () => {
       return;
     }
     expect(result.error.code).toBe('stream-hls-separate-audio');
+    expect(result.error.messageKey).toBe('error.download.stream.tracks');
     expect(result.error.retryable).toBe(false);
-    // Refused at the master: the variant playlist is never even read.
-    expect(seen).toEqual([master]);
   });
 
   it('still assembles a master whose audio is muxed into the variants', async () => {
@@ -335,26 +408,68 @@ describe('assembleStream: streams whose audio is a separate track', () => {
     const result = await assembleStream({ manifestUrl: master, http });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // Untouched: a single track is copied through, not run past the muxer.
+    expect(result.value.extension).toBe('ts');
   });
 
-  it('refuses a DASH manifest that splits audio and video across AdaptationSets', async () => {
+  it('fetches both DASH tracks and joins them into one file', async () => {
     const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
     const http = stubHttp({
       [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT8S"><Period duration="PT8S">
-        <AdaptationSet mimeType="video/mp4"><SegmentTemplate media="v-$Number$.m4s" duration="4" timescale="1"/>
+        <AdaptationSet mimeType="video/mp4"><SegmentTemplate initialization="v-init.m4s" media="v-$Number$.m4s" duration="4" timescale="1"/>
           <Representation id="v" bandwidth="2000000" width="1280" height="720"/></AdaptationSet>
-        <AdaptationSet mimeType="audio/mp4"><SegmentTemplate media="a-$Number$.m4s" duration="4" timescale="1"/>
+        <AdaptationSet mimeType="audio/mp4"><SegmentTemplate initialization="a-init.m4s" media="a-$Number$.m4s" duration="4" timescale="1"/>
           <Representation id="a" bandwidth="128000"/></AdaptationSet>
       </Period></MPD>`,
+      'https://cdn.test/dash/v-init.m4s': initSegment(1),
+      'https://cdn.test/dash/v-1.m4s': fragment(1, 1, bytesOf(0x11)),
+      'https://cdn.test/dash/v-2.m4s': fragment(1, 2, bytesOf(0x12)),
+      'https://cdn.test/dash/a-init.m4s': initSegment(1),
+      'https://cdn.test/dash/a-1.m4s': fragment(1, 1, bytesOf(0x21)),
+      'https://cdn.test/dash/a-2.m4s': fragment(1, 2, bytesOf(0x22)),
     });
 
     const result = await assembleStream({ manifestUrl: mpdUrl, http });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) {
       return;
     }
-    expect(result.error.code).toBe('stream-dash-separate-audio');
+    const file = joinBytes(...result.value.parts);
+    expect(result.value.extension).toBe('mp4');
+    expect(result.value.mimeType).toBe('video/mp4');
+    // Interleaved video, audio, video, audio — with one sequence across the file.
+    expect(trackIdsOf(file)).toEqual([1, 2, 1, 2]);
+    expect(sequencesOf(file)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('picks the highest-bandwidth representation of each track', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const seen: string[] = [];
+    const http = stubHttp(
+      {
+        [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT4S"><Period duration="PT4S">
+        <AdaptationSet mimeType="video/mp4"><SegmentTemplate initialization="$RepresentationID$-init.m4s" media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="vlow" bandwidth="300000"/><Representation id="vhigh" bandwidth="4000000"/></AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4"><SegmentTemplate initialization="$RepresentationID$-init.m4s" media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="alow" bandwidth="64000"/><Representation id="ahigh" bandwidth="192000"/></AdaptationSet>
+      </Period></MPD>`,
+        'https://cdn.test/dash/vhigh-init.m4s': initSegment(1),
+        'https://cdn.test/dash/vhigh-1.m4s': fragment(1, 1, bytesOf(1)),
+        'https://cdn.test/dash/ahigh-init.m4s': initSegment(1),
+        'https://cdn.test/dash/ahigh-1.m4s': fragment(1, 1, bytesOf(2)),
+      },
+      (url) => seen.push(url),
+    );
+
+    const result = await assembleStream({ manifestUrl: mpdUrl, http });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    expect(seen.some((url) => url.includes('vlow'))).toBe(false);
+    expect(seen.some((url) => url.includes('alow'))).toBe(false);
   });
 
   it('assembles a DASH manifest whose single set carries both tracks', async () => {

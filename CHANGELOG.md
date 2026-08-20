@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — Split-track streams download
+
+### Added
+
+- **Streams that keep audio and video in separate tracks can be downloaded.** Most
+  real-world DASH — and much HLS — is packaged that way: 1.1.0 saved the video track
+  alone and produced a silent video, 1.2.0 refused it, and this release joins the two
+  tracks into one file. A fragmented-MP4 muxer does the work
+  (`src/core/download/stream/mux.ts`): one `moov` carrying both tracks, then the
+  fragments interleaved.
+  - **No dependency.** The frozen tech stack and §13.9 make a new library an
+    Owner-approval matter, so the muxer is written here and owned here — about 300
+    lines, no decoding, no re-encoding.
+  - **Sample data is never touched.** Each fragment is copied verbatim, which keeps
+    every offset inside it — `trun`'s `data_offset` above all — valid. Only three
+    fixed-width fields are rewritten: the audio track's id in its `tkhd` and in each
+    `tfhd`, and every fragment's `mfhd` sequence number. Nothing changes size, which is
+    what makes verbatim copying safe.
+  - `sidx`, `styp` and `mfra` are dropped: they index a file by byte offset, and those
+    offsets do not survive interleaving.
+- DASH picks the highest-bandwidth representation of each track; HLS follows the chosen
+  variant's `AUDIO` group to its rendition, preferring the default.
+- The HLS parser now reports each audio rendition's URI, not just that one exists
+  (`src/core/download/stream/hls.ts`).
+
+### Verification
+
+Muxing is validated against **real media**, not only against its author's idea of the
+format:
+
+- `ffmpeg` generates h264 video and aac audio as separate fragmented MP4s; the muxer
+  joins them; `ffprobe` confirms one video and one audio stream, and a full decode
+  reports no errors with every frame of both tracks intact. Skipped, and reported as
+  skipped, where `ffmpeg` is absent.
+- A split-track HLS fixture is committed and served by the loopback site, so the
+  Chromium e2e downloads it end to end and asserts the browser saved **exactly** the
+  bytes the muxer produces, computed independently in the test.
+- Those same committed bytes are then handed to `ffprobe` and decoded, so the file a
+  user receives is known to play.
+
+### Known limitations
+
+- **MPEG-TS split-track streams are still refused.** Joining those means demuxing PES
+  and re-packaging elementary streams — a different job, not started here — so they are
+  refused with a stated reason rather than half-supported.
+- Only the highest-bandwidth rendition of each track is taken; there is still no quality
+  picker.
+- Unchanged: no live streams, assembly is in memory (1 GiB ceiling) and not resumable,
+  Firefox 115–127 cannot download streams, and nothing has been tried against a live
+  streaming site.
+
 ## [1.2.3] — The real icon
 
 ### Added

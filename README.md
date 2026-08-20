@@ -24,11 +24,12 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.2.2 — third defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0
-stable release: per-tab media
-detection, downloads through the browser's own download manager with a durable queue, retry and
-pause/resume, settings, local history, popup and settings surfaces, and the optional context-menu
-and notification integrations.
+**1.3.0 — split-track streams, 2026-08-20.** Built on the 1.0.0 stable release: per-tab
+media detection, downloads through the browser's own download manager with a durable queue,
+retry and pause/resume, settings, local history, popup and settings surfaces, and the
+optional context-menu and notification integrations. Then 1.1.0 added stream downloading,
+1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the extension a real icon, and
+1.3.0 makes split-track streams downloadable.
 
 1.1.0 added, at the Project Owner's direction:
 
@@ -65,6 +66,20 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
+### Split-track streams (1.3.0)
+
+Most real-world DASH — and much HLS — keeps audio and video in separate tracks. 1.1.0
+saved the video alone and produced a **silent video**; 1.2.0 refused it; 1.3.0 joins the
+two into one file with a fragmented-MP4 muxer written here, with no new dependency.
+Sample data is never touched: fragments are copied verbatim, and only track ids and
+fragment sequence numbers are rewritten.
+
+It is validated against real media rather than against a theory of the format: `ffmpeg`
+produces separate h264 and aac tracks, the muxer joins them, and `ffprobe` confirms two
+streams and a clean full decode. A committed split-track fixture is then downloaded end to
+end in a real Chromium, which must save exactly the bytes the muxer produces — and those
+bytes are decoded to prove the file plays.
+
 ### What the defect sweeps fixed
 
 **1.2.2** took the five areas no earlier pass had touched, one at a time: the message
@@ -94,8 +109,8 @@ tabs, and a queue save writes only the job that changed instead of every job.
 silently wrong results, which is the worst class of failure this project can ship. The ones
 that matter to a user:
 
-- A stream whose **audio is a separate track** was saved as video with **no sound**. It is
-  now refused with a stated reason (see the limitations below).
+- A stream whose **audio is a separate track** was saved as video with **no sound**. 1.2.0
+  refused it; 1.3.0 joins the tracks (see above).
 - A server that ignored a byte-range request produced a **corrupt file**. Refused now.
 - A failed download said only "Failed". It now says **why**, and an encrypted stream reads
   as protected media instead of "check your network".
@@ -103,11 +118,13 @@ that matter to a user:
   nothing had asked for host access. Every path asks now.
 - **Site access is listed in Settings**, with a Revoke for each granted origin.
 
-Known limitations at 1.2.2, stated in full in [CHANGELOG.md](CHANGELOG.md):
+Known limitations at 1.3.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
 
-- **Streams that keep audio in a separate track cannot be downloaded.** Most real-world
-  DASH, and much HLS, is packaged that way. AetherDL refuses rather than saving a silent
-  video; joining the tracks (muxing) is out of scope.
+- **MPEG-TS streams that keep audio in a separate track cannot be downloaded.** Joining
+  those means demuxing PES and re-packaging elementary streams, which this project does
+  not do; they are refused with a stated reason rather than saved as a silent video.
+  Fragmented-MP4 split-track streams — most real-world DASH — **are** joined, as of
+  1.3.0.
 - **Live** streams cannot be downloaded (a live playlist has no end); they are reported as such.
 - A stream is assembled **in memory**, one at a time, refused past 1 GiB, and is **not
   resumable** — pausing or cancelling discards what was fetched. The joined file is the

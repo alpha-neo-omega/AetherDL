@@ -1,11 +1,12 @@
-# AetherDL 1.2.3 — Release Audit
+# AetherDL 1.3.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.2.3` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
-> 1.2.0, eight in 1.2.1, twelve in 1.2.2) and the real icon set in 1.2.3. Store submission
+> against the `1.3.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, and split-track stream
+> muxing in 1.3.0. Store submission
 > requires Owner-held credentials and is a gated manual step (§18.8); distribution is via official
 > stores only (§18.6, non-goal N17).
 >
@@ -13,7 +14,7 @@
 > its title and its artifact table still reading `1.2.1`. An editing script asserted its way out
 > before writing, and the follow-up pass updated only the rows it had reached. The checksums in a
 > release audit are the whole point of the document, so a stale table is a real defect in it. Both
-> are corrected here, and the artifact rows below are the `1.2.3` archives.
+> were corrected, and the artifact rows below are always the archives of the version in the title.
 >
 > **What changed in this audit, and why it matters:** through `1.0.0` this document recorded that the
 > extension made no network call of its own. That is no longer true. Assembling a stream means
@@ -26,18 +27,18 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.2.3` — the 1.1.0 stream feature set (ADR-010), the three defect sweeps recorded in `CHANGELOG.md`, and the real icon set, which replaced a 360-byte placeholder square no store would have accepted |
+| Version | `1.3.0` — the 1.1.0 stream feature set (ADR-010), three defect sweeps, the real icon set, and split-track stream muxing: audio and video in separate tracks are now joined into one file instead of refused |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.2.3 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1088 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.3.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1106 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 51 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.2.3-chrome.zip` | 129 431 | 20 | `b00f574a497b5cce221d58cfbecbf270a46d3a5df93916a53a4edfe7987c1348` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.2.3-firefox.zip` | 129 497 | 20 | `d3941dca3ddf099ab75213a20ef1f8ae4216012ccb31cf7041fd7973e15a3660` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.3.0-chrome.zip` | 131 300 | 20 | `995eeaa2c5597faa8680a368e22d129365905d79c04a6c01b8ffdda100b2f706` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.3.0-firefox.zip` | 131 366 | 20 | `d47a4505fda7d789939a7c9d83ade96cba96fafb1cebf59a7c337abc997d4f9e` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -249,11 +250,19 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1088 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1106 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
 validations, the security gate, packaging, and 50 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 97.23 % statements, 94.24 % branches.
+`npm run test:coverage` (which `ci` does not run): 96.78 % statements, 93.30 % branches.
+
+`1.3.0` added 24 tests over split-track muxing: structural tests over hand-built boxes that pin
+which fields are rewritten and that sample data is copied byte for byte, plus real-media tests where
+`ffmpeg` produces separate h264 and aac tracks, the muxer joins them, and `ffprobe` confirms two
+streams and a clean full decode. The Chromium e2e downloads a committed split-track fixture and
+asserts the browser saved exactly the bytes the muxer produces, computed independently; those same
+bytes are then decoded, so the file a user receives is known to play. Where `ffmpeg` is absent the
+real-media tests are skipped, and the skip is reported rather than hidden.
 
 `1.2.3` added 18 tests over the icon set: the PNGs are decoded and the mark itself is asserted — a
 rounded tile with transparent corners, a white glyph on an indigo field, more than one colour, and
@@ -317,10 +326,18 @@ Honest limits of this audit:
   stay legible at 16px, and `tests/unit/build/icons.test.ts` decodes the output and asserts what the
   mark is. They are fit to submit. Whether a designed logotype or promotional tiles are wanted is a
   separate, optional Owner decision (`docs/STORE_LISTING.md` §7).
-- **Streams whose audio is a separate track are refused, not downloaded.** Most real-world DASH and
-  much HLS is packaged that way, so a large share of streams in the wild are out of reach in this
-  build. The alternative — saving a video with no sound — was the 1.1.0 behaviour and is worse;
-  muxing is out of scope (`CHANGELOG.md` 1.2.0).
+- **Split-track streams are downloaded as of `1.3.0`, but only when both tracks are fragmented
+  MP4.** That covers most real-world DASH. An MPEG-TS split-track stream is still refused with a
+  stated reason: joining those means demuxing PES and re-packaging elementary streams, which this
+  project does not do. The muxer itself is validated against real media — `ffmpeg` produces separate
+  h264 and aac tracks, and `ffprobe` confirms two streams and a clean full decode of the joined file,
+  including the exact bytes the browser downloads in the e2e (`CHANGELOG.md` 1.3.0).
+- **The muxer is ours, and container work is unforgiving.** It rewrites three fixed-width fields and
+  copies sample data verbatim, which is the narrowest change that can produce a valid file — but no
+  real-world packager's output has been through it. A stream from a site whose fragments carry boxes
+  the fixtures do not (multiple `traf` per fragment with differing track ids, `saio`/`saiz`, unusual
+  `mvhd` versions) may fail; it will fail with a stated reason rather than produce a broken file,
+  because every refusal path is explicit.
 - **Stream assembly has not been tried against a live streaming site.** Its browser evidence is the
   loopback HLS fixture in `tests/e2e/stream-chromium.spec.ts`. Real sites vary in ways a fixture
   cannot reproduce: signed segment URLs that expire, redirect chains, per-request tokens, CORS
