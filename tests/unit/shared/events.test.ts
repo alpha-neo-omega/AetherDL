@@ -128,7 +128,11 @@ describe('TypedEventEmitter: one subscriber cannot break the others (§20.7)', (
     // Regression: the throw aborted the dispatch, so later listeners were skipped,
     // and it unwound into whatever emitted — in the download manager that meant the
     // scheduler's next step never ran and the queue stalled.
-    const emitter = new TypedEventEmitter<{ tick: [number] }>();
+    // A reporter is supplied so the failure is observed rather than rethrown; the
+    // default path is described above.
+    const emitter = new TypedEventEmitter<{ tick: [number] }>({
+      onListenerError: () => undefined,
+    });
     const before = vi.fn();
     const after = vi.fn();
     emitter.on('tick', before);

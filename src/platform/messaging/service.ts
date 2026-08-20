@@ -22,6 +22,7 @@ import type {
 } from '@platform/browser/webext';
 import { MessagingError, PlatformError } from '@shared/result/errors';
 import type { MessageMap, MessageType } from '@shared/types';
+import { createLogger } from '@shared/logging';
 import { TypedEventEmitter, type Unsubscribe } from '@shared/utils';
 
 const MARKER = '__aetherdl_msg__';
@@ -115,7 +116,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, type: string): P
 /** Create the message bus over a resolved WebExtension API. */
 export function createMessageBus(api: WebExtApi): MessageBus {
   const handlers = new Map<string, (request: unknown) => unknown | Promise<unknown>>();
-  const broadcasts = new TypedEventEmitter<Record<string, [unknown]>>();
+  // A broadcast subscriber that throws is contained and logged. It must not break
+  // delivery to the other subscribers, and it must not surface as an unhandled error
+  // in a context that merely passed the message along (§20.7).
+  const logger = createLogger('messaging');
+  const broadcasts = new TypedEventEmitter<Record<string, [unknown]>>({
+    onListenerError: (error, event) => {
+      logger.error(`A "${event}" broadcast subscriber failed`, error);
+    },
+  });
   let installed = false;
 
   const router: WebExtMessageListener = (

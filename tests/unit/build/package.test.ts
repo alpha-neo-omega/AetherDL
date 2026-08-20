@@ -6,12 +6,21 @@
  * itself: that it is a well-formed ZIP, that its bytes are deterministic, and that a
  * build which fails validation never becomes an artifact.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  assertReleaseTree,
   extractArchive,
   packageTarget,
   RELEASE_TARGETS,
@@ -305,5 +314,58 @@ describe('packaging refuses a build that is not the release', () => {
     expect(() => packageTarget({ target: 'chrome', stores: ['test'] }, '9.9.9')).toThrow(
       /is built at version|not built/,
     );
+  });
+});
+
+describe('packaging refuses what a store package must not contain (§8.15)', () => {
+  it('refuses a source map left behind by a development build', () => {
+    // One `npm run dev:chrome` before packaging put `background.js.map` — which names
+    // every source file — into the archive, with nothing to stop it.
+    write('manifest.json', '{"manifest_version":3}');
+    write('background.js', 'const a=1;');
+    write('background.js.map', '{"version":3,"sources":["../src/secret.ts"]}');
+
+    expect(() => assertReleaseTree(join(workDir, 'src'))).toThrow(/background\.js\.map/);
+  });
+
+  it('refuses an operating-system dotfile', () => {
+    write('manifest.json', '{"manifest_version":3}');
+    write('.DS_Store', 'junk');
+
+    expect(() => assertReleaseTree(join(workDir, 'src'))).toThrow(/\.DS_Store/);
+  });
+
+  it('refuses a file kind that has no business in an extension', () => {
+    write('manifest.json', '{"manifest_version":3}');
+    write('notes.txt', 'todo');
+
+    expect(() => assertReleaseTree(join(workDir, 'src'))).toThrow(/notes\.txt/);
+  });
+
+  it('refuses a symbolic link instead of packaging what it points at', () => {
+    write('manifest.json', '{"manifest_version":3}');
+    const target = join(workDir, 'src', 'real.js');
+    writeFileSync(target, 'const a=1;', 'utf8');
+    try {
+      symlinkSync(target, join(workDir, 'src', 'linked.js'));
+    } catch {
+      // Some environments do not allow symlinks; nothing to assert there.
+      return;
+    }
+
+    expect(() => assertReleaseTree(join(workDir, 'src'))).toThrow(/symbolic link/);
+  });
+
+  it('accepts a normal build directory', () => {
+    write('manifest.json', '{"manifest_version":3}');
+    write('background.js', 'const a=1;');
+    write('popup.html', '<!doctype html>');
+    write('assets/styles.css', 'body{}');
+    write('icons/icon-16.png', 'png');
+    write('_locales/en/messages.json', '{}');
+
+    expect(() => {
+      assertReleaseTree(join(workDir, 'src'));
+    }).not.toThrow();
   });
 });

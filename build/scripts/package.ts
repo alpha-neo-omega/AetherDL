@@ -19,6 +19,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -86,17 +87,46 @@ function crc32(data: Buffer): number {
 }
 
 /**
+ * File kinds a store package may contain. A positive allowlist, because the packager
+ * ships whatever the build directory holds: one `npm run dev:chrome` before packaging
+ * put `background.js.map` — which names every source file — into the archive, and a
+ * `.DS_Store` or a leftover directory went along with it. Anything unexpected is a
+ * failure, not a passenger (§8.15).
+ */
+const PACKAGEABLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.js',
+  '.html',
+  '.json',
+  '.css',
+  '.png',
+  '.svg',
+  '.woff2',
+]);
+
+function isPackageable(name: string): boolean {
+  const base = name.split('/').pop() ?? '';
+  if (base.startsWith('.')) {
+    return false;
+  }
+  const dot = base.lastIndexOf('.');
+  return dot > 0 && PACKAGEABLE_EXTENSIONS.has(base.slice(dot).toLowerCase());
+}
+
+/**
  * Every file under `dir`, as forward-slash paths relative to it, sorted.
  *
- * Entries are classified by `statSync`, which follows symbolic links: a linked file is
- * part of the package, and dropping it silently would ship an extension missing a file
- * that every local check still found through the link.
+ * Symbolic links are refused outright: `statSync` followed them, so a link packaged
+ * the contents of whatever it pointed at — including a file outside the build
+ * directory entirely.
  */
 function collectFiles(dir: string, prefix = ''): readonly string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir)) {
     const name = prefix === '' ? entry : `${prefix}/${entry}`;
-    const stats = statSync(join(dir, entry));
+    const stats = lstatSync(join(dir, entry));
+    if (stats.isSymbolicLink()) {
+      throw new Error(`${name}: symbolic link in the build output — refusing to package it`);
+    }
     if (stats.isDirectory()) {
       found.push(...collectFiles(join(dir, entry), name));
     } else if (stats.isFile()) {
@@ -119,12 +149,38 @@ interface ZipEntry {
 }
 
 /**
+ * Refuse a build directory that holds anything a store package must not carry.
+ *
+ * The packager ships whatever the directory holds: one `npm run dev:chrome` before
+ * packaging put `background.js.map` — which names every source file — into the
+ * archive, and a `.DS_Store` or a stray note went along with it. This is checked on
+ * the release path, so the ZIP writer itself stays a general-purpose writer (§8.15).
+ */
+export function assertReleaseTree(dir: string): void {
+  for (const name of collectFiles(dir)) {
+    if (!isPackageable(name)) {
+      throw new Error(
+        `${name}: not a file a store package may contain — remove it from the build ` +
+          `output (a development build leaves source maps behind) before packaging`,
+      );
+    }
+  }
+}
+
+/**
  * Write `dir` to `archivePath` as a ZIP archive, deterministically. Both stores accept
  * a plain ZIP: Chromium packs one for the Web Store and AMO takes the same container
  * for an add-on.
  */
 export function zipDirectory(dir: string, archivePath: string): { bytes: number; entries: number } {
   const names = collectFiles(dir);
+  // The ZIP fields below are 16- and 32-bit. Our packages are tens of entries and
+  // hundreds of kilobytes, so these can only trip on something being very wrong —
+  // and a silently truncated count would produce a corrupt archive that a store
+  // reviewer discovers instead of the build.
+  if (names.length > 0xffff) {
+    throw new Error(`${archivePath}: ${String(names.length)} entries exceeds the ZIP limit`);
+  }
   const parts: Buffer[] = [];
   const entries: ZipEntry[] = [];
   let offset = 0;
@@ -207,6 +263,9 @@ export function zipDirectory(dir: string, archivePath: string): { bytes: number;
   parts.push(end);
 
   const archive = Buffer.concat(parts);
+  if (archive.length > 0xffffffff) {
+    throw new Error(`${archivePath}: archive exceeds the 4 GiB a plain ZIP can address`);
+  }
   mkdirSync(resolve(archivePath, '..'), { recursive: true });
   writeFileSync(archivePath, archive);
   return { bytes: archive.length, entries: entries.length };
@@ -339,6 +398,9 @@ export function packageTarget(release: ReleaseTarget, version: string): ReleaseA
   // §8.15: validate manifest correctness, CSP, permissions and the §12.1 budgets
   // BEFORE producing an artifact. A build that fails the gate is never packaged.
   validateExtension(outDir, release.target);
+
+  // And nothing may ride along that a store package must not contain.
+  assertReleaseTree(outDir);
 
   // The artifact's name and its checksum record carry the release version, so the
   // build inside it has to BE that version: packaging a stale `dist/` under a fresh
