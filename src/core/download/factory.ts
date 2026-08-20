@@ -14,6 +14,7 @@ import {
   MAX_RETRIES_DEFAULT,
 } from '@shared/constants';
 import type { ConflictAction, DownloadsAdapter } from '@platform/downloads';
+import type { StreamDeliveryAdapter } from '@platform/stream';
 import { createConcurrencyLimiter } from '@core/download/concurrency/concurrency';
 import { createFilenameGenerator } from '@core/download/filename/filename';
 import type { DownloadManager } from '@core/download/manager';
@@ -47,6 +48,11 @@ export interface DownloadSystemOptions {
   readonly filenameTemplate?: string;
   readonly conflictAction?: ConflictAction;
   readonly downloadSubfolder?: string;
+  /**
+   * Assembles non-encrypted HLS/DASH manifests into a local file (§10.6). Omitted,
+   * stream items stay refused at validation, exactly as before.
+   */
+  readonly streamDelivery?: StreamDeliveryAdapter;
   readonly baseDelayMs?: number;
   readonly maxDelayMs?: number;
   readonly generateId?: () => string;
@@ -137,6 +143,7 @@ export function createDownloadSystem(options: DownloadSystemOptions): Configurab
       return downloadSubfolder;
     },
     ...(options.history !== undefined && { history: options.history }),
+    ...(options.streamDelivery !== undefined && { streamDelivery: options.streamDelivery }),
     ...(options.generateId !== undefined && { generateId: options.generateId }),
     ...(options.scheduleTimer !== undefined && { scheduleTimer: options.scheduleTimer }),
   });

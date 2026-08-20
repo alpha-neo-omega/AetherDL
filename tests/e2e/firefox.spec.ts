@@ -302,8 +302,16 @@ test.describe('AetherDL installed in a real Firefox', () => {
     }>('return browser.runtime.getManifest();');
 
     expect(manifest.manifest_version).toBe(3);
+    // No `offscreen`: a Firefox event page already has the DOM APIs assembly needs.
     expect(manifest.permissions).toEqual(['storage', 'downloads', 'activeTab', 'scripting']);
+    // No install-time host permission, and — asked of the browser itself — no host
+    // access actually granted. The stream pattern is optional and requested at
+    // point of use (§13.7).
     expect(manifest.host_permissions ?? []).toEqual([]);
+    const granted = await firefox.script<{ origins: string[] }>(
+      'return browser.permissions.getAll();',
+    );
+    expect(granted.origins).toEqual([]);
     // No menus permission anywhere on Firefox — neither required nor optional (§13.3).
     expect(manifest.optional_permissions).toEqual(['notifications']);
   });

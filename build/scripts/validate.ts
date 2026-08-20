@@ -16,8 +16,10 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { repoRoot } from '../vite/aliases';
 import {
-  BASELINE_PERMISSIONS,
+  hostPermissionsFor,
+  optionalHostPermissionsFor,
   optionalPermissionsFor,
+  permissionsFor,
   TARGETS,
   type Target,
 } from '../manifest/targets';
@@ -48,6 +50,8 @@ export const SURFACES: readonly SurfaceSpec[] = [
   { surface: 'content', entry: 'content.js', budgetGz: 40 * 1024 },
   { surface: 'popup', entry: 'popup.js', html: 'popup.html', budgetGz: 200 * 1024 },
   { surface: 'settings', entry: 'settings.js', html: 'settings.html', budgetGz: 200 * 1024 },
+  // The assembly document carries no UI and no React: parsers and adapters only.
+  { surface: 'offscreen', entry: 'offscreen.js', html: 'offscreen.html', budgetGz: 40 * 1024 },
 ];
 
 export interface SurfacePayload {
@@ -156,10 +160,12 @@ const REQUIRED_FILES = [
   'content.js',
   'popup.js',
   'settings.js',
+  'offscreen.js',
   'popup.html',
   // The shared stylesheet both HTML shells link; a missing asset ships an unstyled UI.
   'assets/styles.css',
   'settings.html',
+  'offscreen.html',
   'icons/icon-16.png',
   'icons/icon-32.png',
   'icons/icon-48.png',
@@ -198,9 +204,10 @@ export function validateExtension(outDir: string, target: Target): void {
       errors.push("CSP must set object-src to 'none' (§13.2)");
     }
 
+    const approvedBaseline = permissionsFor(target);
     const permissions = (manifest.permissions as string[] | undefined) ?? [];
     for (const perm of permissions) {
-      if (!BASELINE_PERMISSIONS.includes(perm)) {
+      if (!approvedBaseline.includes(perm)) {
         errors.push(`permission "${perm}" is outside the approved baseline (§13.3)`);
       }
     }
@@ -216,7 +223,28 @@ export function validateExtension(outDir: string, target: Target): void {
       }
     }
     if (optional.some((p) => p.includes('://') || p === '<all_urls>')) {
-      errors.push('broad host permissions must not be declared, even optionally (§13.7)');
+      errors.push('host patterns belong in the host-permission keys, not optional_permissions');
+    }
+
+    // Host access for stream assembly: declared as optional on Chromium, and as
+    // Firefox's optional-by-default `host_permissions`. What must never appear is a
+    // Chromium `host_permissions` entry, which WOULD be an install-time grant (§13.7).
+    const expectedOptionalHosts = [...optionalHostPermissionsFor(target)];
+    const declaredOptionalHosts =
+      (manifest.optional_host_permissions as string[] | undefined) ?? [];
+    if (declaredOptionalHosts.join(',') !== expectedOptionalHosts.join(',')) {
+      errors.push(
+        `optional_host_permissions must be [${expectedOptionalHosts.join(', ')}] (§13.7)`,
+      );
+    }
+    const expectedHosts = [...hostPermissionsFor(target)];
+    const declaredHosts = (manifest.host_permissions as string[] | undefined) ?? [];
+    if (declaredHosts.join(',') !== expectedHosts.join(',')) {
+      errors.push(
+        target === 'chrome'
+          ? 'Chromium must declare no host_permissions: they are granted at install (§13.7)'
+          : `Firefox host_permissions must be [${expectedHosts.join(', ')}] (§13.7)`,
+      );
     }
 
     const bg = manifest.background as { service_worker?: string; scripts?: string[] } | undefined;

@@ -43,7 +43,9 @@ Each case is pass/fail per browser. A failure is a defect against the Bible and 
 | M2 | Detect | Open the fixture media page, click the toolbar icon | Popup lists the page's video and audio; badge shows the count |
 | M3 | Detect (no media) | Open the plain fixture page, click the toolbar icon | Popup shows the empty state; badge blank |
 | M4 | Download (direct) | In the popup, download the sample MP4 | Native download starts and completes; file lands in the browser's download folder |
-| M5 | Download (non-DRM stream) | Open a page with a non-DRM HLS manifest, download it | Either completes or refuses with a clear reason — never a silent failure |
+| M5 | Download (non-DRM stream) | Open a page with a non-DRM HLS manifest, download it | The stream is assembled from its segments and saved as one playable file, or refused with a clear reason — never a silent failure |
+| M5b | Refuse an encrypted stream | Open a page with an AES-128 HLS playlist, download it | Refused before any segment is fetched, with a stated reason; no key request appears anywhere |
+| M5c | Decline host access | Download a CDN-hosted stream, decline the permission prompt | That download is cancelled with a clear message; every other feature keeps working |
 | M6 | DRM refusal | Open a page with EME-protected media | The item is listed as unsupported with a refusal reason; no download starts |
 | M7 | Queue | Start several downloads at once | At most *Maximum concurrent downloads* run; the rest queue |
 | M8 | Pause / resume | Pause a running download, then resume it | State reflects both; the file completes intact |
@@ -62,7 +64,7 @@ Each case is pass/fail per browser. A failure is a defect against the Bible and 
 | M21 | Keyboard command | Press the *Open popup* shortcut (`Ctrl+Shift+Y` / `Cmd+Shift+Y`) | The popup opens |
 | M22 | Background restart | Idle until the service worker suspends (Chromium), then act | Queue and settings survive; the extension answers |
 | M23 | Private window | Run the extension in a private/incognito window (where enabled) | No history is written from a private window |
-| M24 | Zero egress | Watch DevTools → Network for the extension pages during a full session | No request leaves the device except the media transfer the user asked for |
+| M24 | Network activity confined to the download | Watch DevTools → Network for the extension pages during a full session | Nothing is sent anywhere. The only requests are the media transfer the user asked for and, for a stream, the playlist and segments that download needs |
 
 ## 4. Accessibility pass (§17)
 
@@ -94,11 +96,13 @@ Engines:        Chromium 1228, real unpacked install
 
 | Case | Chromium | Firefox | Observed |
 |---|---|---|---|
-| M1 install | PASS | PASS | MV3; permissions `storage, downloads, activeTab, scripting`; no host permissions; Firefox optional = `notifications` only |
+| M1 install | PASS | PASS | MV3; install permissions `storage, downloads, activeTab, scripting` (+ `offscreen` on Chromium); **no** `host_permissions` on either target; `optional_host_permissions` = `*://*/*` on both; Firefox optional = `notifications` only, and a freshly installed Firefox reports `permissions.getAll().origins === []` |
 | M2 detect | PASS | PASS | Shipped `content.js` read `sample.mp4` + `sample.mp3` from a real DOM; badge showed the supported count |
 | M3 no media | PASS | PASS | Empty state, 0 media cards |
 | M4 download (direct) | PASS | PASS | Native transfer completed, bytes > 0; queue `completed`; filename `sample.mp4` (single extension); history recorded |
-| M5 download (non-DRM stream) | NOT EXECUTED | NOT EXECUTED | No local HLS fixture; needs a manual pass against a non-DRM stream |
+| M5 download (non-DRM stream) | PASS (automated) | NOT EXECUTED | Chromium, real browser, loopback HLS fixture: master → media playlist → 3 segments assembled and saved through `chrome.downloads` as one 12 288-byte file (exactly the segments), queue `completed`, name `.ts` not `.m3u8` (`tests/e2e/stream-chromium.spec.ts`). **Not tried against a live streaming site.** Firefox assembles in its event page instead of an offscreen document; that path is unit-tested only |
+| M5b encrypted stream refused | PASS (automated) | NOT EXECUTED | Chromium: an AES-128 playlist failed with `stream-hls-encrypted`, native download count unchanged 0 → 0, no key requested. Parser-level refusals (AES-128, SAMPLE-AES, unknown methods, session keys, DASH `ContentProtection`/`cenc:pssh`/`pssh`) are unit-tested, including the assertion that no key host or filename appears in a refusal |
+| M5c host access declined | NOT EXECUTED | NOT EXECUTED | A native permission prompt cannot be accepted or dismissed by automation. The request path (origins asked for, tab origin skipped, decline handled with its own message) is covered by `tests/unit/runtime/popup/client.test.ts` and `tests/unit/ui/popup/app.test.tsx` |
 | M6 DRM refusal | PASS | PASS | Item `unsupported` with reason; job `failed/download-unsupported-status`; native downloads 0 → 0 |
 | M7 queue concurrency | PASS | PASS | With *Maximum concurrent downloads* = 2: Chromium `active=2, queued=2, total=4`; Firefox `active=2, total=4` |
 | M8 pause / resume | PASS | PASS | `active → paused → active` on both engines |
@@ -117,13 +121,14 @@ Engines:        Chromium 1228, real unpacked install
 | M21 keyboard command | NOT EXECUTED | NOT EXECUTED | Browser-level shortcut, unreachable from page automation |
 | M22 background restart | NOT EXECUTED | NOT EXECUTED | No deterministic way to suspend an MV3 worker from automation |
 | M23 private window | NOT EXECUTED | NOT EXECUTED | Extensions are disabled in private windows unless the user opts in |
-| M24 zero egress | PASS | PASS | No request outside the fixture origin in Chromium; no remote resource loaded in Gecko |
+| M24 network activity confined to the download | PASS | PASS | Chromium: no request to any host but the one the user's download went to; the stream case observed the manifest, the media playlist and its 3 segments and nothing else. Gecko: no remote resource loaded (no remote script, font, stylesheet or image). Renamed from "zero egress": the extension now performs the reads a stream download requires, and still sends nothing |
 
 No case is failing. The remaining gaps are:
 
-- `NOT EXECUTED` rows — human- or environment-bound (M5, M17, M19, M21, M22, M23 on both engines;
-  M10 and M13 on Firefox), plus the Edge, Brave, Opera and Vivaldi columns, which are not installed
-  here.
+- `NOT EXECUTED` rows — human- or environment-bound (M5c, M17, M19, M21, M22, M23 on both engines;
+  M5, M5b, M10 and M13 on Firefox), plus the Edge, Brave, Opera and Vivaldi columns, which are not
+  installed here. M5 and M5b now pass automatically on Chromium, against a loopback fixture; a
+  live-site pass remains unexecuted, and no DASH browser case exists at all.
 - `PARTIAL` rows — M10 (automatic retry with backoff covered by unit and regression tests rather
   than in a browser), M11 (no single engine exercised all four download settings), M12 (Firefox
   recording verified; browse/export/delete/clear exercised on Chromium), M16 (each engine covered a
@@ -137,12 +142,18 @@ records an explicit, dated exception here.**
 
 ### Owner exception — 2026-08-20
 
+> Updated for `1.1.0`: M5 (non-DRM stream download) and the new M5b (encrypted stream refused) now
+> **pass automatically on Chromium** against a loopback HLS fixture, so they are no longer part of
+> the unexecuted set on that engine. Everything else in this exception stands unchanged, and three
+> stream-related gaps are added to it: no live-site pass, no DASH browser case, and no Firefox
+> stream case (Firefox 115–127 cannot download streams at all — see CHANGELOG.md).
+
 The Project Owner accepts the gaps listed above for the 1.0.0 stable release:
 
-- The `NOT EXECUTED` cases — M5 (non-DRM stream download), M17 (screen reader), M19 (notifications),
-  M21 (keyboard command), M22 (background restart), M23 (private window) on both engines, and M10 and
-  M13 on Firefox — **remain unexecuted**. They were not run, and nothing in this file or elsewhere
-  represents them as passing.
+- The `NOT EXECUTED` cases — M5c (declining host access), M17 (screen reader), M19 (notifications),
+  M21 (keyboard command), M22 (background restart), M23 (private window) on both engines, and M5,
+  M5b, M10 and M13 on Firefox — **remain unexecuted**. They were not run, and nothing in this file or
+  elsewhere represents them as passing.
 - The `PARTIAL` rows stand as written, including M18, whose context-menu surface is verified in no
   browser.
 - **Edge, Brave, Opera and Vivaldi remain untested.** They are not installed in this environment.

@@ -620,3 +620,65 @@ describe('ui/popup PopupApp — theme, accessibility and cleanup', () => {
     view.unmount();
   });
 });
+
+describe('ui/popup PopupApp — host access for stream downloads (§13.7, §4.15)', () => {
+  it('asks for host access before enqueueing, on the same click', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([
+      mediaItem({
+        id: 'stream',
+        title: 'Live Show',
+        kind: 'stream',
+        url: 'https://cdn.test/hls/master.m3u8',
+        delivery: 'hls',
+      }),
+    ]);
+    const view = await mount(fake);
+
+    click(requireByNamePrefix(view.container, 'Download: Live Show'));
+    await flush();
+
+    // The request comes first: a browser only accepts one from a live gesture.
+    const requestIndex = fake.calls.indexOf('requestStreamAccess:https://cdn.test/hls/master.m3u8');
+    const enqueueIndex = fake.calls.indexOf('enqueue:stream');
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(enqueueIndex).toBeGreaterThan(requestIndex);
+    view.unmount();
+  });
+
+  it('does not enqueue when the user declines, and says why', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setStreamAccess(false);
+    fake.setItems([
+      mediaItem({
+        id: 'stream',
+        title: 'Live Show',
+        kind: 'stream',
+        url: 'https://cdn.test/hls/master.m3u8',
+        delivery: 'hls',
+      }),
+    ]);
+    const view = await mount(fake);
+
+    click(requireByNamePrefix(view.container, 'Download: Live Show'));
+    await flush();
+
+    expect(fake.calls.some((call) => call.startsWith('enqueue'))).toBe(false);
+    expect(view.container.textContent).toContain('needs access to the media host');
+    view.unmount();
+  });
+
+  it('asks for nothing when the download needs no host access', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'a', title: 'Clip', url: 'https://cdn.test/clip.mp4' })]);
+    const view = await mount(fake);
+
+    click(requireByNamePrefix(view.container, 'Download: Clip'));
+    await flush();
+
+    // The port is still called — it is what decides — but with nothing to ask for.
+    expect(fake.calls).toContain('requestStreamAccess:https://cdn.test/clip.mp4');
+    expect(fake.calls).toContain('enqueue:a');
+    view.unmount();
+  });
+});

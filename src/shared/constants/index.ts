@@ -25,6 +25,14 @@ export const SUPPORTED_VIDEO_FORMATS: readonly string[] = [
   'mov',
   'avi',
   'mkv',
+  'ts',
+  'm2ts',
+  'mts',
+  'mpg',
+  'mpeg',
+  'wmv',
+  'flv',
+  '3gp',
 ];
 
 /** Supported audio container extensions (PROJECT_BIBLE.md §5.1). */

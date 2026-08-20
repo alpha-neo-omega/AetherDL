@@ -20,6 +20,7 @@ import type { NetworkObserver } from '@platform/network';
 import type { NotificationsAdapter } from '@platform/notifications';
 import type { PermissionsAdapter } from '@platform/permissions';
 import type { ScriptingAdapter } from '@platform/scripting';
+import type { StreamDeliveryAdapter } from '@platform/stream';
 import type { StorageService } from '@platform/storage';
 import type { TabsAdapter } from '@platform/tabs';
 
@@ -47,6 +48,13 @@ export interface Browser {
   /** Message catalogue access (§19.1); degrades to empty lookups when absent. */
   readonly i18n: I18nService;
   readonly network?: NetworkObserver;
+  /**
+   * Stream assembly by way of an offscreen document — present only where the engine
+   * needs one, i.e. Chromium with the `offscreen` permission granted (§10.6, §7.4).
+   * Firefox's event page assembles in place, so the facade leaves this undefined and
+   * the composition root builds the in-process adapter instead.
+   */
+  readonly stream?: StreamDeliveryAdapter;
   /**
    * Present only when the matching optional permission has been granted, so the
    * namespace exists (§13.3). Consumers feature-check before use.

@@ -10,11 +10,13 @@
  * Public API: Manifest, generateManifest.
  */
 import {
-  BASELINE_PERMISSIONS,
   FIREFOX_ADDON_ID,
   FIREFOX_DATA_COLLECTION_PERMISSIONS,
   FIREFOX_MIN_VERSION,
+  hostPermissionsFor,
+  optionalHostPermissionsFor,
   optionalPermissionsFor,
+  permissionsFor,
   type BuildContext,
 } from './targets';
 
@@ -74,6 +76,10 @@ export interface Manifest {
   readonly background: BackgroundSpec;
   readonly permissions: readonly string[];
   readonly optional_permissions: readonly string[];
+  /** Chromium: optional host patterns, requested at point of use (§13.7). */
+  readonly optional_host_permissions?: readonly string[];
+  /** Firefox: host patterns that are optional-by-default on that engine (§13.7). */
+  readonly host_permissions?: readonly string[];
   readonly content_security_policy: CspSpec;
   readonly commands: Readonly<Record<string, CommandSpec>>;
   readonly browser_specific_settings?: GeckoSettings;
@@ -129,8 +135,14 @@ export function generateManifest(ctx: BuildContext): Manifest {
       open_in_tab: true,
     },
     background: backgroundFor(ctx.target),
-    permissions: [...BASELINE_PERMISSIONS],
+    permissions: [...permissionsFor(ctx.target)],
     optional_permissions: [...optionalPermissionsFor(ctx.target)],
+    ...(optionalHostPermissionsFor(ctx.target).length > 0 && {
+      optional_host_permissions: [...optionalHostPermissionsFor(ctx.target)],
+    }),
+    ...(hostPermissionsFor(ctx.target).length > 0 && {
+      host_permissions: [...hostPermissionsFor(ctx.target)],
+    }),
     content_security_policy: { extension_pages: CSP },
     commands: COMMANDS,
   };

@@ -15,13 +15,13 @@ human can paste them into each store console when publication happens.
 | Deliverable               | "store listings/assets", required by Phase 10 (PROJECT_BIBLE.md §22.11, line 2731; ROADMAP.md Phase 10 — Release Preparation, line 381)                                                   |
 | Phase                     | Phase 11 — Stable Release. Its included scope is "Store submission/publication via official channels only" (ROADMAP.md:398); Phase 10 prepared this copy                                   |
 | Publication phase         | Phase 11 — Stable Release, whose included scope is "Store submission/publication via official channels only" (ROADMAP.md:398)                                                             |
-| Version to submit         | `1.0.0` — the stable public release (ROADMAP.md:483, :677). The `0.9.x` candidates are superseded and their archives are gone                                                              |
+| Version to submit         | `1.1.0` — feature release adding non-DRM HLS/DASH downloads and a wider container set (ADR-010). Earlier archives are superseded and gone                                                   |
 | Distribution channel      | Official extension stores only. Any other update channel is a permanent non-goal (PROJECT_BIBLE.md §3.1 item N17, line 286 onward)                                                        |
 | Listing language          | English (`en`) only — the sole catalogue in the repository is `public/_locales/en/messages.json`, and `en` is the declared default and fallback locale (PROJECT_BIBLE.md §19.2)            |
 
 Two preconditions apply before this copy is used:
 
-1. **Cleared.** The artifacts under `dist/` are built at the stable version `1.0.0`
+1. **Cleared.** The artifacts under `dist/` are built at version `1.1.0`
    (`dist/chrome/manifest.json`, `dist/firefox/manifest.json`, matching `package.json`), and the
    packaged archives in `dist/release/` carry the same version. Versions are synchronized across
    all target builds from one source (PROJECT_BIBLE.md §7.6; ROADMAP.md §7).
@@ -30,7 +30,7 @@ Two preconditions apply before this copy is used:
    (§5). A store listing must describe what the submitted build actually does, so each claim needs
    a confirming pass over the stable build — the manual matrix in
    `docs/MANUAL_TEST_MATRIX.md` §3 exercises detection (M2/M3), direct download (M4), non-DRM
-   stream download (M5 — currently unavailable, see below), DRM refusal (M6), queue and retry
+   stream download (M5), DRM refusal (M6), queue and retry
    (M7–M10), settings (M11), history
    (M12/M13), context menu (M18), and notifications (M19).
 
@@ -106,11 +106,15 @@ AetherDL finds the media on the page you are already looking at and downloads it
 - Detects media on the active tab: `<video>`, `<audio>` and `<source>` elements, direct media URLs,
   and non-DRM HLS and DASH manifests. Detection is per-tab and updates as new media appears on the
   page. (PROJECT_BIBLE.md §4.1)
-- Downloads direct and progressive media through the browser's own download manager. **HLS and DASH
-  manifests are detected and listed, but downloading them is not available in this build** — stream
-  assembly (PROJECT_BIBLE.md §10.6) is not implemented, so the download gate declines them with a
-  stated reason. This limitation must be stated in the listing rather than implied away; see
-  CHANGELOG.md "Known limitations".
+- Downloads direct and progressive media through the browser's own download manager.
+- Downloads **non-encrypted HLS and DASH streams** by reading the playlist, fetching its segments in
+  order and joining them into one file, which your browser then saves (PROJECT_BIBLE.md §10.6).
+  State the limits rather than imply them away — see CHANGELOG.md "Known limitations":
+  **live** streams cannot be downloaded, a stream is assembled in memory and declined past 1 GiB,
+  the joined file is the segments concatenated with no remuxing (`.ts` for MPEG-TS, `.mp4` for
+  fragmented MP4), only the highest-bandwidth rendition is taken, and **Firefox 115–127 cannot
+  download streams at all** because the permission key AetherDL uses to ask for host access at the
+  moment you click arrived in Firefox 128.
 - Shows what it found before you commit: title, type, kind, resolution, duration, quality and
   source host. A field it cannot determine is left off the card rather than guessed
   (PROJECT_BIBLE.md §4.2). **Do not claim a file size**: size reaches a card only through network
@@ -143,14 +147,13 @@ AetherDL finds the media on the page you are already looking at and downloads it
 
 **Supported formats**
 
-Downloadable in this build — video: MP4, WebM, M4V, MOV, AVI, MKV. Audio: MP3, AAC, M4A, FLAC,
-WAV, OGG. Delivery: direct HTTP and HTTPS URLs, HTML5 media elements and progressive streams.
-(PROJECT_BIBLE.md §5.1–§5.5)
+Downloadable in this build — video: MP4, WebM, M4V, MOV, AVI, MKV, TS, M2TS, MTS, MPG/MPEG, WMV,
+FLV, 3GP. Audio: MP3, AAC, M4A, FLAC, WAV, OGG. Streams: non-encrypted HLS (`.m3u8`) and DASH
+(`.mpd`). Delivery: direct HTTP and HTTPS URLs, HTML5 media elements, progressive files, and
+segmented streams assembled into one file. (PROJECT_BIBLE.md §5.1–§5.5, §10.6)
 
-Detected but not downloadable in this build: non-encrypted HLS (`.m3u8`) and DASH (`.mpd`)
-manifests. §5.2 lists them as supported media, and detection reports them, but the transfer path
-for them is unfinished (see the note under "What it does"). Do not advertise stream downloading
-until that capability ships.
+Not downloadable, by design: anything encrypted or DRM-protected, `blob:` media and MediaSource
+streams (they have no addressable bytes to fetch), and live streams (they have no end).
 
 **What it will not do**
 
@@ -162,16 +165,29 @@ Protected media is detected and refused with a plain explanation, not attempted 
 
 **Privacy**
 
-AetherDL has no server, no account and no telemetry. It collects nothing, sends nothing, and makes
-no network request of its own. Your settings live in local extension storage; your queue and
-history live in a local database on your device. Nothing about you, the pages you visit, or what
-you download leaves your machine, because there is nowhere for it to go. (PROJECT_BIBLE.md §14.1,
-§14.2, §14.3)
+AetherDL has no server, no account and no telemetry. It collects nothing and **sends** nothing.
+
+Be precise about the one thing it does request: to download a stream, AetherDL reads the playlist
+and its segments itself — plain `GET` requests to the site's own media host, with no cookies and no
+credentials attached, only for a download you asked for, and only on hosts you granted when you
+clicked. Nothing else on your machine talks to the network on AetherDL's behalf, and a progressive
+download is performed by the browser itself.
+
+Your settings live in local extension storage; your queue and history live in a local database on
+your device. Nothing about you, the pages you visit, or what you download leaves your machine,
+because there is nowhere for it to go. (PROJECT_BIBLE.md §14.1, §14.2; see also
+docs/adr/010-non-drm-stream-assembly.md, which records why the older "no network request of its own"
+wording no longer applies.)
 
 **Permissions**
 
-AetherDL asks for four permissions at install — local storage, downloads, access to the tab you
-are actively using, and content-script injection — and no site access at all. Notifications and
+AetherDL asks for local storage, downloads, access to the tab you are actively using, and
+content-script injection at install — and **no site access at all**. On Chromium it also asks for
+`offscreen`, which grants access to nothing: it lets AetherDL open its own hidden page to assemble a
+stream, because a Chromium service worker cannot do that itself.
+
+Site access is asked for **when you click download on a stream**, for that stream's hosts only, and
+can be revoked at any time. Declining cancels that download and nothing else. Notifications and
 context-menu entries are optional and are requested only if you turn those features on.
 (PROJECT_BIBLE.md §13.3, §13.7)
 
@@ -207,11 +223,10 @@ with fallback for missing translations (PROJECT_BIBLE.md §19.2). Do not list ad
 
 ## 4. Permission justifications
 
-These are the permissions actually present in the built manifests. Both targets declare the same
-four install-time permissions: `dist/chrome/manifest.json` and `dist/firefox/manifest.json` list
-`"storage"`, `"downloads"`, `"activeTab"`, `"scripting"`, matching the build's baseline allow-list
-(`build/manifest/targets.ts:32-37`) and the Bible's baseline table (PROJECT_BIBLE.md §13.3, line
-2015 onward).
+These are the permissions actually present in the built manifests. Both targets declare
+`"storage"`, `"downloads"`, `"activeTab"`, `"scripting"`; Chromium adds `"offscreen"`, which grants
+access to nothing (see below). Both declare `"optional_host_permissions": ["*://*/*"]` and **no**
+`host_permissions`. Read `dist/chrome/manifest.json` and `dist/firefox/manifest.json` to confirm.
 
 ### 4.1 Install-time permissions
 
@@ -221,6 +236,7 @@ four install-time permissions: `dist/chrome/manifest.json` and `dist/firefox/man
 | `downloads`  | Performs the download itself through the browser's native download facility. This is the extension's core function; it cannot download files without it.   | §13.3, §4.3, §10.8    |
 | `activeTab`  | Looks for media only in the tab you are actively using, and only when you act. This is what replaces broad access to every website.                        | §13.3, §13.1, §13.7   |
 | `scripting`  | Injects the small detection script into that one tab on demand, rather than declaring a permanent content script for every page you visit.                 | §13.3, §7.5           |
+| `offscreen` (Chromium only) | Grants access to nothing. It lets AetherDL open its own hidden extension page to join a stream's segments into one file, because a Chromium service worker cannot build the local file handle the download needs. Firefox needs no equivalent. | §7.4, §10.6, ADR-010 |
 
 ### 4.2 Optional permissions
 
@@ -239,22 +255,31 @@ it at install instead "would take a permission the user never chose". The contex
 therefore reports itself unavailable on Firefox and degrades gracefully (PROJECT_BIBLE.md §7.2,
 §7.4). Do not describe context-menu integration as a Firefox feature in the AMO listing.
 
-### 4.3 No host permissions
+### 4.3 Host permissions: none at install, asked for when you click
 
 **Neither built manifest contains a `host_permissions` key, and neither lists any origin or
-URL-match pattern in `permissions`.** Verify by reading `dist/chrome/manifest.json` and
-`dist/firefox/manifest.json` directly. This is required, not incidental: PROJECT_BIBLE.md §13.3
-states AetherDL "**MUST NOT** request `<all_urls>` or broad host permissions at install", and
-§13.7 sets the policy as "`activeTab` + user gesture. No standing host permissions." The build
-tooling records the same restriction where the permission sets are declared
-(`build/manifest/targets.ts`, the comment on `optionalPermissionsFor`: "No host permission is
-declared: broad access is never requested up front (§13.7)").
+URL-match pattern in `permissions`.** No site access is granted when the extension is installed.
+PROJECT_BIBLE.md §13.3 requires that ("**MUST NOT** request `<all_urls>` or broad host permissions
+at install") and §13.7 sets the policy ("`activeTab` + user gesture. No standing host permissions.").
 
-For any store field asking about site access, the answer is: **no site access is requested, at
-install or later.** This build declares no `optional_host_permissions` and asks for no origin: the
-extension reads a page only in the moment the user opens it from the toolbar, under `activeTab`
-(PROJECT_BIBLE.md §13.7). The Bible allows a future opt-in per-origin grant (§13.3, §4.15); 1.0.0
-does not implement one.
+Both manifests **do** declare `optional_host_permissions: ["*://*/*"]`. That is a request AetherDL
+may make later, never a grant it holds. What to tell a reviewer:
+
+- It is used for **one thing**: downloading a non-encrypted HLS or DASH stream, which requires
+  reading the playlist and its segments from the media host (§10.6).
+- It is requested **on the download click**, and only for the origins that stream actually lives on
+  — not the declared pattern. The pattern is broad only because a playlist names its segment hosts
+  when it is read, so no narrower pattern can be declared in advance.
+- The origin of the tab you are on is **not** requested at all: `activeTab` already covers it.
+- Declining cancels that one download. Nothing else changes, and no other feature depends on it.
+- It is revocable at any time from the browser's own extension controls.
+- A freshly installed build holds nothing: the Firefox e2e asserts
+  `permissions.getAll().origins === []`.
+
+Firefox note for AMO: `optional_host_permissions` requires Firefox 128, so on Firefox 115–127 the
+request cannot be made and stream downloads are unavailable there. Declaring the pattern under
+`host_permissions` instead was tried and rejected — the installed add-on reported the origin already
+granted, which is exactly the install-time access this project refuses to take.
 
 ### 4.4 Other manifest capabilities that stores may query
 
@@ -270,9 +295,9 @@ does not implement one.
 ### 5.1 Plain-language privacy statement
 
 Use this text wherever a store asks for a privacy summary. It is the product's own wording,
-extended from `public/_locales/en/messages.json` key `about_privacy` ("AetherDL works entirely on
-this device. It has no account, no telemetry and makes no network calls of its own.") and
-PROJECT_BIBLE.md §14.
+extended from `public/_locales/en/messages.json` key `about_privacy` ("AetherDL has no account, no
+telemetry and sends nothing anywhere. It reads a playlist and its segments only to download what you
+asked for, on hosts you granted.") and PROJECT_BIBLE.md §14.
 
 ---
 
@@ -292,9 +317,11 @@ What exists locally, and only locally (PROJECT_BIBLE.md §14.2):
 | Download history  | Local database (IndexedDB)    | No                 | Search, delete, clear, or export as JSON |
 | Detection results | Memory only, per tab          | No                 | Discarded when you navigate or close     |
 
-The only network activity is the downloads you ask for, performed by the browser itself. AetherDL's
-own code makes no network request at all, and it observes no network traffic: what it lists comes
-from reading the page's DOM (PROJECT_BIBLE.md §14.3; network-request observation is unimplemented,
+Network activity is limited to the downloads you ask for. A progressive file is fetched by the
+browser itself. A stream is different: AetherDL reads the playlist and its segments itself, with
+plain `GET` requests to the media host, no cookies and no credentials, on hosts you granted at the
+moment you clicked — and nothing is ever uploaded or reported. AetherDL observes no network traffic:
+what it lists comes from reading the page's DOM (network-request observation is unimplemented,
 see CHANGELOG.md "Known limitations"). Uninstalling removes the
 extension's local data, per your browser's normal behaviour (§14.4).
 
@@ -514,8 +541,11 @@ required field in at least one store console.
 - [ ] Approve the short summary and full description in §3, after checking them against the
       release build (see §1, precondition 2).
 - [ ] Approve the category choice per store (§3.4).
-- [ ] Confirm `1.0.0` is the version to submit. The artifacts on disk and the packaged archives all
-      read `1.0.0`, the stable release version (§1, precondition 1).
+- [ ] Confirm `1.1.0` is the version to submit. The artifacts on disk and the packaged archives all
+      read `1.1.0` (§1, precondition 1).
+- [ ] Read §4.3 before answering any store question about site access: the listing must say that no
+      host permission is granted at install and that access is requested per-origin when the user
+      downloads a stream — and, for AMO, that Firefox 115–127 cannot download streams at all.
 - [ ] Confirm the licence statement to display (the repository ships MIT, `LICENSE`).
 
 **Assets**

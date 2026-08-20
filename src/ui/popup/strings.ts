@@ -94,6 +94,8 @@ export const EN_MESSAGES = {
   'error.validation': 'That media link cannot be downloaded.',
   'error.storage': 'Could not save the download queue. Try again.',
   'error.permission': 'AetherDL needs the downloads permission to save files.',
+  'error.permission.host':
+    'AetherDL needs access to the media host to download a stream. Nothing is downloaded without it.',
   'error.capability': 'Not supported in this browser.',
   'error.internal': 'Something went wrong. Try again.',
   'error.unavailable.title': 'AetherDL is not responding',

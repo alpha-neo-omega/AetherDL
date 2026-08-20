@@ -113,6 +113,8 @@ export interface FakeRuntimeClient {
   setTabId(tabId: number | undefined): void;
   setItems(items: readonly MediaItem[]): void;
   setTasks(tasks: readonly DownloadTask[]): void;
+  /** Decide what a point-of-use host-permission request answers (§13.7). */
+  setStreamAccess(granted: boolean): void;
   /** Make the next call of a method reject with `error`. */
   failNext(method: string, error: unknown): void;
   /** Push a runtime download event, as the background broadcasts it. */
@@ -133,6 +135,7 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
   let items: readonly MediaItem[] = [];
   let tasks: readonly DownloadTask[] = [];
   let settings: Settings = DEFAULT_SETTINGS;
+  let streamAccess = true;
   const settingsListeners = new Set<(next: Settings) => void>();
 
   const guard = <T>(method: string, argument: string, value: T): Promise<T> => {
@@ -156,6 +159,9 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
     },
     setTasks(next: readonly DownloadTask[]): void {
       tasks = next;
+    },
+    setStreamAccess(granted: boolean): void {
+      streamAccess = granted;
     },
     failNext(method: string, error: unknown): void {
       failures.set(method, error);
@@ -188,6 +194,8 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
       refreshDetection: (id: number) => guard('refreshDetection', String(id), items),
       queryQueue: () => guard('queryQueue', '', tasks),
       enqueue: (itemIds: readonly string[]) => guard<void>('enqueue', itemIds.join(','), undefined),
+      requestStreamAccess: (urls: readonly string[]) =>
+        guard<boolean>('requestStreamAccess', urls.join(','), streamAccess),
       cancel: (id: string) => guard<void>('cancel', id, undefined),
       retry: (id: string) => guard<void>('retry', id, undefined),
       pause: (id: string) => guard<void>('pause', id, undefined),

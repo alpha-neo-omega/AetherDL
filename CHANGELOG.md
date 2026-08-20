@@ -9,6 +9,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — Non-DRM stream downloads and a wider container set
+
+A feature release, directed by the Project Owner on 2026-08-20 over the frozen 1.0.0 scope. It adds
+progressive containers and — the substantial part — makes non-encrypted HLS and DASH streams
+downloadable. See [ADR-010](docs/adr/010-non-drm-stream-assembly.md) for the decision and its costs.
+
+### Added
+
+- **Progressive containers**: `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `wmv`, `flv`, `3gp` join the
+  existing `mp4`, `webm`, `m4v`, `mov`, `avi`, `mkv`. The MIME allowlist gained the matching types
+  (`video/mp2t`, `video/mpeg`, `video/x-ms-wmv`, `video/x-flv`, `video/3gpp`, `video/x-ms-asf`,
+  `video/3gpp2`, `audio/mp3`, `video/avi`, `video/msvideo`) (`src/shared/utils/media.ts`,
+  `src/shared/constants/index.ts`).
+- **HLS downloading**: a pure M3U8 parser that follows a master playlist to its highest-bandwidth
+  variant, reads `#EXTINF` segments, `#EXT-X-MAP` initialisation segments, `#EXT-X-BYTERANGE`
+  (including the continuation form with the offset omitted), and reports a live playlist as live
+  (`src/core/download/stream/hls.ts`).
+- **DASH downloading**: a pure MPD parser with its own bounded tag scanner — a Chromium MV3 service
+  worker has no `DOMParser` — covering `SegmentTemplate` with `$Number$`/`$Time$`/`%0Nd` padding,
+  `SegmentTimeline` with `@r` repeats, `SegmentList`/`SegmentURL` with media ranges, nested
+  `BaseURL`, `Initialization`, and `mediaPresentationDuration`-derived segment counts
+  (`src/core/download/stream/dash.ts`).
+- **Assembly**: fetches the manifest and every segment in playlist order, reports per-segment
+  progress on the job, enforces a 1 GiB total and 64 MiB per-segment ceiling, stops on abort, and
+  reports which origins it actually read (`src/core/download/stream/assemble.ts`).
+- **`platform/http`**: the single, read-only network adapter — GET only, `credentials: 'omit'`,
+  `cache: 'no-store'`, http(s) only, `Range` support, per-request timeout, size ceilings, distinct
+  error codes, retryable classification (`src/platform/http/`).
+- **Delivery to the browser**: assembled bytes become a `blob:` URL that the Downloads API saves,
+  so the transfer of record is still the browser's (`src/platform/objecturl/`,
+  `src/core/download/stream/deliver.ts`).
+- **Chromium offscreen assembly**: `offscreen` permission, an offscreen document that assembles and
+  holds the blob, a readiness handshake before work is sent, and document lifetime tied to the
+  bytes it holds (`src/runtime/offscreen/`, `src/platform/stream/offscreen.ts`).
+- **Point-of-use host access**: `*://*/*` declared optional on both targets and requested on the
+  download click for the specific origins in play, skipping the tab's own origin because
+  `activeTab` already covers it (`src/runtime/popup/client.ts`, `build/manifest/targets.ts`).
+- 133 new automated tests, including an end-to-end HLS download in a real Chromium against a
+  loopback fixture, and an end-to-end refusal of an encrypted playlist
+  (`tests/e2e/stream-chromium.spec.ts`).
+
+### Changed
+
+- **The network claim.** Through 1.0.0 the extension made no network request of its own. It now
+  performs exactly the GET requests a stream download requires, to the media host, without
+  credentials or cookies. Nothing is ever sent: no analytics, telemetry, beacon, socket or report.
+  README, store listing, release audit and the security gate's own check name were all changed to
+  say this, rather than leaving a claim the code no longer honours.
+- **The security gate** now permits `fetch` in exactly one file (`src/platform/http/service.ts`)
+  and, over the emitted import graph, fails the build if `fetch` appears in a bundle no assembly
+  surface loads or in anything a UI surface can reach. Every other egress API stays forbidden
+  everywhere (`build/scripts/security-gate.ts`, `tests/unit/build/security-gate.test.ts`).
+- **Download validation** allows HLS/DASH only when the caller can actually assemble them; a build
+  or context without assembly refuses them exactly as before. `blob:` and MediaSource delivery stay
+  refused unconditionally (`src/core/download/validate.ts`).
+- A stream job's saved filename takes the container assembly actually produced (`.ts` or `.mp4`)
+  instead of the playlist's `.m3u8`/`.mpd`, and its byte total is the assembled size
+  (`src/core/download/manager/manager.ts`).
+- The popup's error copy distinguishes a declined host permission from a missing `downloads`
+  permission, and an error's own message key now wins over its category when the catalogue has it
+  (`src/ui/popup/errors.ts`, `src/ui/popup/strings.ts`, `public/_locales/en/messages.json`).
+- Version `1.0.0` → `1.1.0`; artifacts repackaged as `aetherdl-1.1.0-chrome.zip` and
+  `aetherdl-1.1.0-firefox.zip` with fresh checksums.
+
+### Fixed
+
+- The popup collapsed to a sliver instead of rendering at its 380px width. `max-inline-size: 100vw`
+  was applied to a panel that a browser popup measures from its own content, where the reported
+  viewport can be a few pixels wide before layout; the cap now yields to a 320px floor rather than
+  to nothing. Verified in a real Chromium at 1280px, 400px and 120px viewports
+  (`src/ui/design-system/styles.css`, `tests/e2e/chromium.spec.ts`).
+
+### Security
+
+- **Encryption is refused three times over**: at classification (DRM/EME media is `unsupported`), at
+  download validation, and inside the parsers themselves — any `#EXT-X-KEY`/`#EXT-X-SESSION-KEY`
+  with a method other than `NONE`, any `ContentProtection`, `cenc:pssh` or `pssh` ends parsing
+  before a single segment is fetched. A key URI is never read, followed, returned or logged, and
+  tests assert that no key host or filename appears anywhere in a refusal
+  (PROJECT_BIBLE.md §6, ADR-005).
+- No host permission is granted at install on either target. The Firefox route of declaring the
+  pattern under `host_permissions` was **measured and rejected**: `permissions.getAll()` reported
+  the origin already granted, so both targets use `optional_host_permissions`.
+- Unchanged: strict MV3 CSP (`script-src 'self'; object-src 'none'`), no remote code, no dynamic
+  evaluation, no analytics, no telemetry, no backend, no accounts, and no setting that could enable
+  any of them.
+
+### Known limitations
+
+- **Firefox 115–127 cannot download streams.** `optional_host_permissions` arrived in Firefox 128,
+  and taking host access at install instead was rejected on least-privilege grounds. Progressive
+  downloads are unaffected on those versions.
+- Live streams cannot be downloaded; they are reported as live rather than attempted.
+- A stream is assembled in memory and refused past 1 GiB.
+- No remuxing: MPEG-TS segments concatenate to `.ts`, fMP4 segments to `.mp4`. Players handle these;
+  some editors prefer a remuxed file.
+- Only the highest-bandwidth rendition is assembled — no quality picker for streams yet.
+- Detection still reads the DOM, so a site that loads its playlist purely through a script may not
+  be detected; network-request observation remains unimplemented.
+- Stream assembly has **not** been exercised against a live streaming site; its browser coverage is
+  the loopback HLS fixture. No DASH end-to-end browser case exists (the DASH parser and assembly are
+  covered by unit tests).
+- Carried forward from 1.0.0: the _Warn about duplicates_ setting is stored but inert; no file size
+  is shown before a download starts; the icons are placeholders; the manual cases recorded as NOT
+  EXECUTED in `docs/MANUAL_TEST_MATRIX.md` remain unexecuted.
+- Governance, for the record rather than as a limitation: **PROJECT_BIBLE.md was amended to 1.1.0**
+  on Owner approval (2026-08-20, ADR-010). §14.3 is retitled "External Network Calls by the
+  Extension" and now states the permitted activity exhaustively; §2.6, §5.1, §7.4, §10.6, §12.1,
+  §13.3, §22.11 and §24 were amended with it, and AGENT_RULES.md, ARCHITECTURE.md and ROADMAP.md
+  were brought into line. §14.1 and §25.3 are untouched — no analytics, telemetry, tracking, data
+  collection, cloud, backend, accounts or identifiers, and the DRM boundary, all remain permanent.
+
+### Not done
+
+- Nothing was submitted to or published on any extension store, and no GitHub release was created.
+
 ## [1.0.0] — Phase 11: Stable Release
 
 First stable release. **No product code changed**: every file under `src/` is byte-identical to the

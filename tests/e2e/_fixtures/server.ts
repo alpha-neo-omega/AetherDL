@@ -20,6 +20,15 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.js': 'text/javascript',
 };
 
+/**
+ * A non-encrypted HLS VOD stream, generated rather than stored: three equal segments
+ * behind a media playlist reached through a master playlist. Deterministic, so a test
+ * can assert the assembled size exactly (§16.3 non-DRM fixtures only).
+ */
+export const HLS_SEGMENT_BYTES = 4096;
+export const HLS_SEGMENT_COUNT = 3;
+export const HLS_TOTAL_BYTES = HLS_SEGMENT_BYTES * HLS_SEGMENT_COUNT;
+
 export interface FixtureSite {
   /** Origin the fixture pages are served from, e.g. `http://127.0.0.1:41234`. */
   readonly origin: string;
@@ -50,6 +59,72 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
         response.write(Buffer.alloc(32_768));
       }, 120);
       request.on('close', () => clearInterval(tick));
+      return;
+    }
+    // The HLS fixture: master playlist, media playlist, and its segments.
+    if (requested === '/media/hls/master.m3u8') {
+      const body = [
+        '#EXTM3U',
+        '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360',
+        'index.m3u8',
+        '',
+      ].join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    if (requested === '/media/hls/index.m3u8') {
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-TARGETDURATION:4',
+        '#EXT-X-PLAYLIST-TYPE:VOD',
+      ];
+      for (let index = 1; index <= HLS_SEGMENT_COUNT; index += 1) {
+        lines.push('#EXTINF:4.000,', `seg-${String(index)}.ts`);
+      }
+      lines.push('#EXT-X-ENDLIST', '');
+      const body = lines.join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    const segment = /^\/media\/hls\/seg-(\d+)\.ts$/.exec(requested);
+    if (segment !== null) {
+      const index = Number(segment[1]);
+      if (index < 1 || index > HLS_SEGMENT_COUNT) {
+        response.writeHead(404).end();
+        return;
+      }
+      // Each segment carries its own byte value, so a wrong ORDER is detectable.
+      response.writeHead(200, {
+        'content-type': 'video/mp2t',
+        'content-length': String(HLS_SEGMENT_BYTES),
+      });
+      response.end(Buffer.alloc(HLS_SEGMENT_BYTES, index));
+      return;
+    }
+    // An encrypted playlist, which must be refused rather than downloaded (§6).
+    if (requested === '/media/hls/encrypted.m3u8') {
+      const body = [
+        '#EXTM3U',
+        '#EXT-X-KEY:METHOD=AES-128,URI="/media/hls/key.bin"',
+        '#EXTINF:4.000,',
+        'seg-1.ts',
+        '#EXT-X-ENDLIST',
+        '',
+      ].join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
       return;
     }
     // A URL that always fails, for the retry case.

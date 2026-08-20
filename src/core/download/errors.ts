@@ -5,7 +5,7 @@
  * Restrictions: Domain layer — depends only on shared/ (§8.4).
  * Dependencies: shared/result (PlatformError, ErrorCategory).
  * Public API: DownloadValidationError, QueueError, RetryError, FilenameError,
- *          SchedulerError, PermissionDeniedError.
+ *          SchedulerError, PermissionDeniedError, StreamAssemblyError.
  */
 import type { ErrorCategory } from '@shared/result';
 import { PlatformError } from '@shared/result/errors';
@@ -38,4 +38,13 @@ export class SchedulerError extends PlatformError {
 /** A required browser permission is missing/denied (§13.3, §20.3 `permission`). */
 export class PermissionDeniedError extends PlatformError {
   readonly category: ErrorCategory = 'permission';
+}
+
+/**
+ * HLS/DASH assembly could not produce a file (§10.6, §20.3 `network`). Also the
+ * refusal carrier for an encrypted manifest: assembly stops and says so, and no key
+ * is ever fetched or handled (§6, ADR-005).
+ */
+export class StreamAssemblyError extends PlatformError {
+  readonly category: ErrorCategory = 'network';
 }

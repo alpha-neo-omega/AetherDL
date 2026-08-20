@@ -8,7 +8,8 @@
  * Restrictions: Leaf layer — depends only on the sibling result types (§8.16).
  * Dependencies: shared/result (AppError, ErrorCategory).
  * Public API: PlatformError, StorageError, PermissionError, MessagingError,
- *          RuntimeError, DownloadError, TabError, ValidationError.
+ *          RuntimeError, DownloadError, TabError, ValidationError, HttpError,
+ *          NetworkError.
  *
  * Note: imported via the subpath `@shared/result/errors` (not re-exported from the
  * result index) to keep the dependency edge one-way and cycle-free.
@@ -57,6 +58,22 @@ export abstract class PlatformError extends Error implements AppError {
     const withCause = this.cause !== undefined ? { ...base, cause: this.cause } : base;
     return this.context !== undefined ? { ...withCause, context: this.context } : withCause;
   }
+}
+
+/**
+ * A request reached the server and it answered unacceptably (§20.3 `http`). Used by
+ * the HTTP read adapter that stream assembly relies on.
+ */
+export class HttpError extends PlatformError {
+  override readonly category: ErrorCategory = 'http';
+}
+
+/**
+ * A request never produced an answer — transport failure, abort, or timeout
+ * (§20.3 `network`).
+ */
+export class NetworkError extends PlatformError {
+  override readonly category: ErrorCategory = 'network';
 }
 
 /** Storage/persistence failure (§20.3 `storage`). */

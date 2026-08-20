@@ -19,7 +19,7 @@ import {
 } from '@shared/constants';
 import { RuntimeError } from '@shared/result/errors';
 import type { DownloadEventBroadcast, DownloadTask, MediaItem, Settings } from '@shared/types';
-import type { Unsubscribe } from '@shared/utils';
+import { manifestTypeFromUrl, parseUrl, type Unsubscribe } from '@shared/utils';
 import type { PopupRuntimeClient } from '@ui/popup';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,10 +50,20 @@ function asTabId(payload: unknown): number | undefined {
 
 export function createPopupRuntimeClient(browser: Browser): PopupRuntimeClient {
   const bus = browser.messaging;
+  /**
+   * The origin of the tab the popup was opened over, captured when the popup reads
+   * the active tab at load. Opening the popup is the gesture that activates
+   * `activeTab`, which already grants access to THAT origin — so a stream served by
+   * the page itself needs no second prompt (§13.7, §4.15). Cached because the check
+   * happens inside a click handler, where an await would spend the user gesture the
+   * permission request needs.
+   */
+  let activeOrigin: string | undefined;
 
   return {
     async getActiveTabId(): Promise<number | undefined> {
       const tab = await browser.tabs.getActive();
+      activeOrigin = tab?.url === undefined ? undefined : parseUrl(tab.url)?.origin;
       return tab?.id;
     },
 
@@ -71,6 +81,30 @@ export function createPopupRuntimeClient(browser: Browser): PopupRuntimeClient {
 
     enqueue(itemIds: readonly string[]): Promise<void> {
       return bus.send('download/enqueue', { itemIds });
+    },
+
+    /**
+     * Only stream manifests need host access — a progressive file is saved by the
+     * browser itself, which needs no permission from us (§10.8). The request names
+     * the origins actually in play, never a broad pattern (§13.7), skips the tab's
+     * own origin (already covered by `activeTab`), and is issued without awaiting
+     * anything first so the user gesture is still live.
+     */
+    requestStreamAccess(urls: readonly string[]): Promise<boolean> {
+      const origins = new Set<string>();
+      for (const url of urls) {
+        if (manifestTypeFromUrl(url) === undefined) {
+          continue;
+        }
+        const parsed = parseUrl(url);
+        if (parsed !== undefined && parsed.origin !== activeOrigin) {
+          origins.add(`${parsed.origin}/*`);
+        }
+      }
+      if (origins.size === 0) {
+        return Promise.resolve(true);
+      }
+      return browser.permissions.requestHosts([...origins]);
     },
 
     cancel(taskId: string): Promise<void> {

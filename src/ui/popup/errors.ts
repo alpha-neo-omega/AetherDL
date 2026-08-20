@@ -10,7 +10,7 @@
  * Public API: toAppError, describeError, ErrorDescription.
  */
 import type { AppError, ErrorCategory } from '@shared/result';
-import type { MessageKey, Translate } from './strings';
+import { EN_MESSAGES, type MessageKey, type Translate } from './strings';
 
 const CATEGORIES: ReadonlySet<string> = new Set<ErrorCategory>([
   'network',
@@ -77,11 +77,21 @@ const CATEGORY_MESSAGE: Readonly<Record<ErrorCategory, MessageKey>> = {
   internal: 'error.internal',
 };
 
-/** Plain-language presentation for an error, with its recovery affordance (§20.5). */
+/**
+ * Plain-language presentation for an error, with its recovery affordance (§20.5).
+ *
+ * An error's own `messageKey` wins when the catalogue has that exact key: a category
+ * covers a family, and some failures in a family need their own sentence (a declined
+ * host permission is not the same as a missing downloads permission). Everything
+ * else falls back to the category copy, so no error is ever left without text.
+ */
 export function describeError(error: AppError, t: Translate): ErrorDescription {
+  const specific = Object.prototype.hasOwnProperty.call(EN_MESSAGES, error.messageKey)
+    ? (error.messageKey as MessageKey)
+    : undefined;
   return {
     title: t('error.title'),
-    detail: t(CATEGORY_MESSAGE[error.category]),
+    detail: t(specific ?? CATEGORY_MESSAGE[error.category]),
     retryable: error.retryable,
   };
 }

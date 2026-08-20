@@ -378,7 +378,7 @@ restating it.
 
 - **Phase Purpose.** Produce store-ready, audited release candidates.
 - **Objectives.** Version, package per target, prepare listings, and complete final security/privacy audits.
-- **Scope — Included.** Versioned release build; per-target packaged artifacts; store listings/assets; `CHANGELOG.md`; final security + privacy audits ([PROJECT_BIBLE.md §22.11](PROJECT_BIBLE.md#2211-phase-10--release), [§14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension)).
+- **Scope — Included.** Versioned release build; per-target packaged artifacts; store listings/assets; `CHANGELOG.md`; final security + privacy audits ([PROJECT_BIBLE.md §22.11](PROJECT_BIBLE.md#2211-phase-10--release), [§14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)).
 - **Scope — Excluded.** Public store publication (Phase 11).
 - **Dependencies.** Phase 9.
 - **Deliverables.** Release-candidate artifacts per target; validated store packages; changelog; audit results confirming zero telemetry/egress and minimal justified permissions.
@@ -540,7 +540,7 @@ The register tracks execution and delivery risks. Ratings: Impact `Low/Medium/Hi
 | R4 | **Permission limitations** block a feature on a target | Medium | Medium | Optional permissions at point-of-use ([PROJECT_BIBLE.md §13.3](PROJECT_BIBLE.md#133-permission-strategy)); graceful degradation; escalate ([AGENT_RULES.md §15](AGENT_RULES.md#15-escalation-policy)). | Security Engineer |
 | R5 | **Performance regressions** breach budgets | High | Medium | Budgets enforced in CI where measurable; Phase 8 gate ([PROJECT_BIBLE.md §12.9](PROJECT_BIBLE.md#129-performance-regression-policy)). | Performance Owner |
 | R6 | **Security regressions** (CSP, permissions, unsafe code) | High | Low | Security review gate each release ([PROJECT_BIBLE.md §13.10](PROJECT_BIBLE.md#1310-security-review-gate)); hard prohibitions ([AGENT_RULES.md §11](AGENT_RULES.md#11-security-rules)). | Security Engineer |
-| R7 | **Privacy regression** (accidental egress/telemetry) | High | Low | Zero-egress architecture; network audit ([PROJECT_BIBLE.md §14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension)); non-amendable guarantees. | Security Engineer |
+| R7 | **Privacy regression** (accidental egress/telemetry) | High | Low | Nothing is transmitted, and network reads are confined to one adapter that no UI surface can reach — enforced by the release security gate over the emitted import graph; network audit ([PROJECT_BIBLE.md §14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)); non-amendable guarantees. | Security Engineer |
 | R8 | **Dependency issues** (supply chain, breakage) | Medium | Medium | Minimal, pinned dependencies; approval-gated changes ([PROJECT_BIBLE.md §13.9](PROJECT_BIBLE.md#139-dependency--supply-chain-security), [AGENT_RULES.md §6](AGENT_RULES.md#6-dependency-rules)). | Principal Architect |
 | R9 | **Testing delays** push Code Freeze | Medium | Medium | Testing-first mindset; per-phase test obligations; regression tests on every fix ([PROJECT_BIBLE.md §16](PROJECT_BIBLE.md#16-testing)). | Engineering Manager |
 | R10 | **Store validation/policy rejection** at release | Medium | Medium | Early manifest/CSP/permission validation in packaging ([PROJECT_BIBLE.md §8.15](PROJECT_BIBLE.md#815-build--packaging-architecture)); Phase 10 audits. | Release Manager |

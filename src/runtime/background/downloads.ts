@@ -18,10 +18,12 @@
  *          createBackgroundDownloadRuntime.
  */
 import type { Browser } from '@platform/browser';
+import type { StreamDeliveryAdapter } from '@platform/stream';
 import type { ObjectStore } from '@platform/storage';
 import { createQueueRepository } from '@core/storage/queue-repository';
 import { DownloadValidationError, PermissionDeniedError } from '@core/download/errors';
 import { createDownloadSystem, type ConfigurableDownloadManager } from '@core/download/factory';
+import { resolveStreamDelivery } from '@runtime/background/stream';
 import type { QueueCompleted, RetryScheduled } from '@core/download/manager';
 import { createDownloadQueue } from '@core/download/queue/queue';
 import type { DownloadQueue, QueueStats } from '@core/download/queue';
@@ -189,6 +191,12 @@ export interface BackgroundDownloadRuntimeDeps {
    * (§8.7). Omitted, the system keeps its normative defaults.
    */
   readonly getSettings?: () => Promise<Settings>;
+  /**
+   * How HLS/DASH manifests become files (§10.6). Omitted, the runtime resolves the
+   * adapter this engine supports; pass `null` to run with assembly off, which keeps
+   * stream items refused exactly as a build without it.
+   */
+  readonly streamDelivery?: StreamDeliveryAdapter | null;
   readonly clock?: () => number;
   readonly generateId?: () => string;
   readonly random?: () => number;
@@ -271,10 +279,15 @@ export function createBackgroundDownloadRuntime(
   // manager's internals are never reached into.
   const repository = createQueueRepository({ store: deps.store, onError: publishError });
   const queue: DownloadQueue = createDownloadQueue({ repository });
+  const streamDelivery =
+    deps.streamDelivery === null
+      ? undefined
+      : (deps.streamDelivery ?? resolveStreamDelivery(browser));
   const manager: ConfigurableDownloadManager = createDownloadSystem({
     downloads: browser.downloads,
     queue,
     clock,
+    ...(streamDelivery !== undefined && { streamDelivery }),
     ...(deps.history !== undefined && { history: deps.history }),
     ...(deps.generateId !== undefined && { generateId: deps.generateId }),
     ...(deps.random !== undefined && { random: deps.random }),

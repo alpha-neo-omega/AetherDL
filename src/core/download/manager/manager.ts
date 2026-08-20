@@ -6,7 +6,9 @@
  *          and events. The single authority over downloads.
  * Restrictions: Domain layer — NEVER touches chrome/browser; all transfers go
  *          through the injected DownloadsAdapter (§8.4, §10.8). Deterministic given
- *          injected clock/id/timer.
+ *          injected clock/id/timer. A stream job additionally uses the injected
+ *          StreamDeliveryAdapter to turn a manifest into a local URL first — the
+ *          write itself still belongs to the browser (§10.6).
  * Public API: DownloadManagerDeps, createDownloadManager.
  */
 import { DownloadError, PlatformError } from '@shared/result/errors';
@@ -14,6 +16,7 @@ import type { AppError } from '@shared/result';
 import type { DownloadTask, HistoryRecord, MediaItem, TaskState } from '@shared/types';
 import { TypedEventEmitter } from '@shared/utils';
 import type { ConflictAction, DownloadChange, DownloadsAdapter } from '@platform/downloads';
+import type { StreamDelivery, StreamDeliveryAdapter } from '@platform/stream';
 import type { ConcurrencyLimiter, ReleaseSlot } from '@core/download/concurrency';
 import { resolveCollision } from '@core/download/filename/filename';
 import type { FilenameGenerator } from '@core/download/filename';
@@ -46,6 +49,12 @@ export interface DownloadManagerDeps {
   readonly filenameTemplate: string;
   readonly conflictAction: ConflictAction;
   readonly downloadSubfolder?: string;
+  /**
+   * Assembles a non-encrypted HLS/DASH manifest into a local URL (§10.6). Omitted,
+   * or reporting `supported: false`, keeps stream items refused at validation — the
+   * behaviour of every build without assembly.
+   */
+  readonly streamDelivery?: StreamDeliveryAdapter;
   readonly generateId?: () => string;
   readonly scheduleTimer?: (delayMs: number, callback: () => void) => CancelTimer;
 }
@@ -75,6 +84,10 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
   const nativeToJob = new Map<number, string>();
   const releases = new Map<string, ReleaseSlot>();
   const retryTimers = new Map<string, CancelTimer>();
+  // Stream jobs only: the assembly in flight (so a cancel can stop the fetches) and
+  // the delivered URL (so its bytes are always freed, on every exit path).
+  const assemblies = new Map<string, AbortController>();
+  const deliveries = new Map<string, StreamDelivery>();
   let queuePaused = false;
   let disposed = false;
   let hadPending = false;
@@ -110,6 +123,36 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     if (release !== undefined) {
       releases.delete(jobId);
       release();
+    }
+  };
+
+  const streamsSupported = deps.streamDelivery?.supported === true;
+
+  /** Whether this job's source is a manifest this build can assemble (§10.6). */
+  const isStreamJob = (item: MediaItem): boolean =>
+    streamsSupported && deps.streamDelivery?.handles(item.url) === true;
+
+  const validate = (item: MediaItem): ReturnType<typeof validateDownloadable> =>
+    validateDownloadable(item, { allowStreams: streamsSupported });
+
+  /** Free an assembled stream's bytes. Safe to call for a job that had none. */
+  const releaseDelivery = (jobId: string): void => {
+    const delivery = deliveries.get(jobId);
+    if (delivery === undefined) {
+      return;
+    }
+    deliveries.delete(jobId);
+    void delivery.release().catch((cause: unknown) => {
+      emitError('stream-release-failed', cause);
+    });
+  };
+
+  /** Stop an assembly still fetching segments (cancel, remove, shutdown). */
+  const abortAssembly = (jobId: string): void => {
+    const controller = assemblies.get(jobId);
+    if (controller !== undefined) {
+      assemblies.delete(jobId);
+      controller.abort();
     }
   };
 
@@ -223,6 +266,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     }
     progress.remove(current.id);
     finishSlot(current.id);
+    releaseDelivery(current.id);
     // Drop any prior retry timer before (re)scheduling so it cannot leak.
     clearRetryTimer(current.id);
     const decision = retryPolicy.shouldRetry(error, current.attempt);
@@ -273,6 +317,8 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     }
     progress.remove(jobId);
     finishSlot(jobId);
+    // The browser has the file now; the blob behind the URL is dead weight (§12.1).
+    releaseDelivery(jobId);
     recordHistory(done, 'completed');
     emitter.emit('job:completed', done);
     pump();
@@ -333,25 +379,107 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     }
   };
 
+  /**
+   * Replace a name's extension. A manifest URL ends in `.m3u8`/`.mpd`, so the name
+   * generated at enqueue names the playlist, not the video; only after assembly is
+   * the real container known (§10.7).
+   */
+  const withExtension = (name: string, extension: string): string => {
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    return `${base}.${extension}`;
+  };
+
+  /**
+   * Assemble a manifest into a local URL, reporting segment progress on the job as
+   * it goes. Throws on refusal (encryption above all) or failure; the caller's catch
+   * turns that into the normal failure path (§10.6, §6).
+   */
+  const assembleStreamFor = async (job: DownloadTask): Promise<StreamDelivery> => {
+    const adapter = deps.streamDelivery;
+    if (adapter === undefined) {
+      throw new DownloadError('This build cannot assemble streams', {
+        code: 'stream-unsupported',
+        messageKey: 'error.download.stream',
+      });
+    }
+    const controller = new AbortController();
+    assemblies.set(job.id, controller);
+    try {
+      const delivery = await adapter.assemble({
+        manifestUrl: job.item.url,
+        signal: controller.signal,
+        onProgress: (progressReport): void => {
+          // Only a job still preparing may be patched: a concurrent cancel/remove
+          // owns it otherwise, and a stale patch would resurrect it (§10.2).
+          const live = queue.getById(job.id);
+          if (live === undefined || live.state !== 'preparing') {
+            return;
+          }
+          const ratio =
+            progressReport.segmentsTotal > 0
+              ? progressReport.segmentsDone / progressReport.segmentsTotal
+              : 0;
+          void patch(live, {
+            bytesReceived: progressReport.bytesReceived,
+            progress: ratio,
+          }).then(
+            (updated) => {
+              emitter.emit('progress', updated);
+            },
+            (cause: unknown) => {
+              emitError('stream-progress-failed', cause);
+            },
+          );
+        },
+      });
+      deliveries.set(job.id, delivery);
+      return delivery;
+    } finally {
+      assemblies.delete(job.id);
+    }
+  };
+
   const startJob = async (job: DownloadTask, release: ReleaseSlot): Promise<void> => {
     releases.set(job.id, release);
     const prepared = await transition(job, 'preparing');
     emitter.emit('job:preparing', prepared);
     try {
+      // A stream is fetched and joined first; what the browser then saves is the
+      // assembled local file, never the playlist (§10.6).
+      const delivery = isStreamJob(prepared.item) ? await assembleStreamFor(prepared) : undefined;
+      // A cancel during assembly already finalized the job; do not start a transfer
+      // for it, and free the bytes the assembly produced.
+      const afterAssembly = queue.getById(job.id);
+      if (
+        delivery !== undefined &&
+        (afterAssembly === undefined || afterAssembly.state !== 'preparing')
+      ) {
+        releaseDelivery(job.id);
+        finishSlot(job.id);
+        pump();
+        checkQueueCompletion();
+        return;
+      }
       // Exclude THIS job from the collision set — it was just persisted as
       // 'preparing', so including it would make every download self-collide (§10.7).
-      const name = resolveCollision(prepared.filename, activeFilenames(job.id));
+      const generated =
+        delivery === undefined
+          ? prepared.filename
+          : withExtension(prepared.filename, delivery.extension);
+      const name = resolveCollision(generated, activeFilenames(job.id));
       const subfolder =
         deps.downloadSubfolder !== undefined ? sanitizeSubfolder(deps.downloadSubfolder) : '';
       const target = subfolder !== '' ? `${subfolder}/${name}` : name;
       const nativeId = await downloads.start({
-        url: prepared.item.url,
+        url: delivery?.url ?? prepared.item.url,
         filename: target,
         conflictAction: deps.conflictAction,
         saveAs: false,
       });
       const current = queue.getById(job.id);
       if (current === undefined || current.state === 'canceling' || current.state === 'canceled') {
+        releaseDelivery(job.id);
         await downloads.cancel(nativeId).catch(() => undefined);
         // Re-read AFTER the cancel await: a concurrent cancelJob/removeJob may have
         // finalized the job already. Only finalize (and emit) if it is still
@@ -371,9 +499,15 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
         nativeDownloadId: nativeId,
         filename: name,
         startedAt: clock(),
+        // For a stream the total is known exactly once assembly finishes, which is
+        // more than the native adapter can report for a blob URL (§10.5).
+        ...(delivery !== undefined && { bytesTotal: delivery.byteLength }),
       });
       emitter.emit('job:started', active);
     } catch (cause) {
+      // Assembly or start failed: the assembled bytes are useless now, and a retry
+      // assembles again from scratch.
+      releaseDelivery(job.id);
       // Use the LIVE job; if a concurrent remove dropped it, never resurrect it via
       // the stale `prepared` snapshot — just release the slot.
       const live = queue.getById(job.id);
@@ -433,6 +567,9 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       return;
     }
     clearRetryTimer(taskId);
+    // A stream job may be mid-assembly with no native transfer yet: the fetches are
+    // ours to stop, and the bytes ours to drop (§10.10).
+    abortAssembly(taskId);
     if (job.state === 'active' || job.state === 'preparing' || job.state === 'canceling') {
       // Route through 'canceling' (valid from active/preparing). A 'preparing' job
       // may have no native id yet (startJob still awaiting downloads.start) —
@@ -451,12 +588,14 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
         const canceled = await transition(current, 'canceled', { completedAt: clock() });
         progress.remove(taskId);
         finishSlot(taskId);
+        releaseDelivery(taskId);
         emitter.emit('job:cancelled', canceled);
       }
     } else {
       // queued / paused / retrying — no native transfer to stop.
       const canceled = await transition(job, 'canceled', { completedAt: clock() });
       progress.remove(taskId);
+      releaseDelivery(taskId);
       emitter.emit('job:cancelled', canceled);
     }
     pump();
@@ -469,6 +608,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       return;
     }
     clearRetryTimer(taskId);
+    abortAssembly(taskId);
     if (
       initial.nativeDownloadId !== undefined &&
       (initial.state === 'active' || initial.state === 'preparing' || initial.state === 'canceling')
@@ -493,6 +633,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     job = await transition(job, 'removed');
     await queue.remove(taskId);
     progress.remove(taskId);
+    releaseDelivery(taskId);
     notify();
     pump();
     checkQueueCompletion();
@@ -509,7 +650,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       for (const item of items) {
         const job = createJob(item, priority, index);
         index += 1;
-        const validation = validateDownloadable(item);
+        const validation = validate(item);
         if (validation.ok) {
           await queue.add(job);
           emitter.emit('job:queued', job);
@@ -541,6 +682,12 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       const job = queue.getById(taskId);
       if (job === undefined) {
         return;
+      }
+      // A job still assembling has no native transfer to park; stopping the fetches
+      // and dropping the partial bytes is the honest equivalent, and a resume starts
+      // the assembly again (§10.2).
+      if (job.state === 'preparing') {
+        abortAssembly(taskId);
       }
       if (job.state === 'queued') {
         await transition(job, 'paused');
@@ -578,12 +725,13 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
         return;
       }
       // NEVER resurrect a job that failed validation or is non-retryable (§6):
-      // DRM/unsupported, HLS/DASH, blob, or invalid URLs. Manual retry() must apply
-      // the same gate as the automatic path (which uses retryPolicy.shouldRetry).
+      // DRM/unsupported, blob, or invalid URLs — and stream manifests too in a build
+      // that cannot assemble them. Manual retry() must apply the same gate as the
+      // automatic path (which uses retryPolicy.shouldRetry).
       if (job.error !== undefined && !job.error.retryable) {
         return;
       }
-      if (!validateDownloadable(job.item).ok) {
+      if (!validate(job.item).ok) {
         return;
       }
       clearRetryTimer(taskId);
@@ -657,6 +805,13 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     async dispose(): Promise<void> {
       disposed = true;
       unsubDownloads();
+      for (const controller of assemblies.values()) {
+        controller.abort();
+      }
+      assemblies.clear();
+      for (const jobId of [...deliveries.keys()]) {
+        releaseDelivery(jobId);
+      }
       for (const cancel of retryTimers.values()) {
         cancel();
       }

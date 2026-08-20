@@ -25,7 +25,7 @@
 | **Document Type** | Operational Handbook (Agent Behavior Policy) |
 | **Applies To** | Every AI coding agent, without exception (see [Scope](#scope)) |
 | **Status** | Ratified / Active |
-| **Version** | 1.0.0 |
+| **Version** | 1.1.0 |
 | **Stability** | **PERMANENT** — binding for the entire lifetime of the project |
 | **Authority** | Subordinate to [PROJECT_BIBLE.md](PROJECT_BIBLE.md); superior to any agent default behavior |
 | **Owner** | Project Owner (AetherDL) |
@@ -33,7 +33,10 @@
 
 ### Version
 
-`1.0.0`. This document is versioned independently of the product and of PROJECT_BIBLE.md.
+`1.1.0`. This document is versioned independently of the product and of PROJECT_BIBLE.md.
+Amended 2026-08-20 alongside Bible 1.1.0 ([ADR-010](docs/adr/010-non-drm-stream-assembly.md)): the
+privacy rule below now forbids **transmission** rather than all network access, because non-DRM
+stream assembly requires the extension to read a playlist and its segments.
 It is amended only through the change-control process defined in
 [PROJECT_BIBLE.md §25 Change Control](PROJECT_BIBLE.md#25-change-control--amendment-process).
 
@@ -397,12 +400,28 @@ Privacy is defined in [PROJECT_BIBLE.md §14 Privacy](PROJECT_BIBLE.md#14-privac
 | P1 | **No analytics** | [§14.1](PROJECT_BIBLE.md#141-privacy-guarantees-all-must-hold), [§3.1 N4](PROJECT_BIBLE.md#31-definitive-non-goals) |
 | P2 | **No telemetry** | [§14.1](PROJECT_BIBLE.md#141-privacy-guarantees-all-must-hold), [§3.1 N5](PROJECT_BIBLE.md#31-definitive-non-goals) |
 | P3 | **No tracking** | [§14.1](PROJECT_BIBLE.md#141-privacy-guarantees-all-must-hold), [§3.1 N6](PROJECT_BIBLE.md#31-definitive-non-goals) |
-| P4 | **No external data collection** | [§14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension) |
+| P4 | **Nothing is transmitted** | [§14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension) |
 | P5 | **Everything remains local** | [§14.2](PROJECT_BIBLE.md#142-data-inventory-what-exists-and-where) |
 
-The extension's own code makes **zero** external network calls ([§14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension)).
-The agent **MUST NOT** introduce any identifier, remote endpoint, or data-egress path. These
-guarantees are non-amendable ([§25.3](PROJECT_BIBLE.md#253-non-amendable-items)).
+The extension **MUST NOT** transmit anything, anywhere: the agent **MUST NOT** introduce an
+identifier, a remote endpoint, or any data-egress path. That guarantee is non-amendable
+([§25.3](PROJECT_BIBLE.md#253-non-amendable-items)).
+
+The extension's own code makes network calls of exactly **one** kind: read-only `GET` requests to
+assemble a non-DRM stream the user asked for
+([§14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension),
+[§10.6](PROJECT_BIBLE.md#106-stream-assembly)). For the agent this means:
+
+- **MUST NOT** call `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon` or `EventSource` anywhere
+  except the single read-only adapter `src/platform/http/service.ts`.
+- **MUST NOT** make that adapter reachable from a UI surface (popup, settings, content script). The
+  release security gate walks the emitted import graph and fails the build if it is.
+- **MUST NOT** attach credentials, cookies, headers or identifiers to a request, use any method but
+  `GET`, or send a request body.
+- **MUST NOT** request a host permission at install, or fetch an origin the user has not granted at
+  point of use ([§13.3](PROJECT_BIBLE.md#133-permission-strategy)).
+- **MUST NOT** fetch, read, follow or log a decryption key, ever
+  ([§6](PROJECT_BIBLE.md#6-unsupported-content)).
 
 ---
 

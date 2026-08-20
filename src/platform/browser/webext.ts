@@ -279,6 +279,21 @@ export interface WebExtI18n {
 }
 
 /** The normalized WebExtension surface consumed by platform services. */
+/**
+ * Chromium's offscreen-document API (MV3). It exists only on Chromium and only when
+ * the `offscreen` permission is granted; Firefox has no equivalent because its
+ * background page already has DOM access (§7.4). Consumers feature-check.
+ */
+export interface WebExtOffscreen {
+  createDocument(parameters: {
+    url: string;
+    reasons: readonly string[];
+    justification: string;
+  }): Promise<void>;
+  closeDocument(): Promise<void>;
+  hasDocument?(): Promise<boolean>;
+}
+
 export interface WebExtApi {
   runtime: WebExtRuntime;
   tabs: WebExtTabs;
@@ -298,6 +313,8 @@ export interface WebExtApi {
   menus?: WebExtMenus;
   commands?: WebExtCommands;
   i18n?: WebExtI18n;
+  /** Chromium only, and only with the `offscreen` permission granted (§10.6). */
+  offscreen?: WebExtOffscreen;
 }
 
 /** Result of resolving the ambient namespace. */
@@ -317,6 +334,34 @@ interface GlobalWithWebExt {
  */
 export function detectTarget(api: WebExtApi): PlatformTarget {
   return typeof api.runtime.getBrowserInfo === 'function' ? 'firefox' : 'chrome';
+}
+
+/**
+ * Resolve the ambient namespace for a context that only has messaging.
+ *
+ * A Chromium offscreen document is such a context: it exposes `chrome.runtime`
+ * messaging but NOT `runtime.getManifest`, so {@link resolveWebExtApi} — which
+ * requires the manifest to be readable — refuses it. Nothing here is a relaxation
+ * of the security model: the caller gets the same typed surface and may only use
+ * what actually exists (§7.4, §8.2).
+ */
+export function resolveMessagingApi(): ResolvedApi {
+  const globalScope = globalThis as GlobalWithWebExt;
+  const namespace = globalScope.browser ?? globalScope.chrome;
+  if (namespace === null || typeof namespace !== 'object') {
+    throw new RuntimeError('WebExtension APIs are unavailable in this context', {
+      code: 'runtime-no-webext',
+      messageKey: 'error.runtime.unavailable',
+    });
+  }
+  const api = namespace as WebExtApi;
+  if (typeof api.runtime?.sendMessage !== 'function') {
+    throw new RuntimeError('WebExtension messaging is unavailable', {
+      code: 'runtime-no-messaging-api',
+      messageKey: 'error.runtime.unavailable',
+    });
+  }
+  return { api, target: detectTarget(api) };
 }
 
 /**

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AetherDL stream assembly</title>
+  </head>
+  <body>
+    <!--
+      No UI: this document exists only because a Chromium MV3 service worker cannot
+      create a blob URL. It assembles a stream the user asked for and is closed again
+      as soon as the bytes are handed to the browser's download manager.
+    -->
+    <script type="module" src="./offscreen.js"></script>
+  </body>
+</html>

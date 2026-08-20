@@ -21,6 +21,7 @@ import { createNotificationsService } from '@platform/notifications/service';
 import { createPermissionsService } from '@platform/permissions/service';
 import { createScriptingService } from '@platform/scripting/service';
 import { createStorageService } from '@platform/storage/service';
+import { createOffscreenStreamDelivery } from '@platform/stream/offscreen';
 import { createTabsService } from '@platform/tabs/service';
 
 /** Build the facade from an explicit API + target (used by tests and adapters). */
@@ -29,6 +30,7 @@ export function createBrowserFrom(api: WebExtApi, target: PlatformTarget): Brows
   // (§13.3), so each adapter is constructed only when its namespace is present and
   // the facade leaves the member undefined otherwise (§7.2 graceful degradation).
   const menus = resolveMenus(api);
+  const messaging = createMessageBus(api);
   return {
     target,
     capabilities: detectCapabilities(api, target),
@@ -37,11 +39,16 @@ export function createBrowserFrom(api: WebExtApi, target: PlatformTarget): Brows
     downloads: createDownloadsService(api),
     storage: createStorageService(api),
     permissions: createPermissionsService(api),
-    messaging: createMessageBus(api),
+    messaging,
     action: createActionService(api),
     scripting: createScriptingService(api),
     i18n: createI18nService(api),
     ...(menus !== undefined && { menus: createMenusService(menus) }),
+    // Chromium only: a service worker has no blob-URL factory, so assembly happens
+    // in an offscreen document reached through this client (§10.6, §7.4).
+    ...(api.offscreen !== undefined && {
+      stream: createOffscreenStreamDelivery({ api, messaging }),
+    }),
     ...(api.notifications !== undefined && {
       notifications: createNotificationsService(api.notifications),
     }),

@@ -35,12 +35,18 @@ describe('shared/utils media helpers', () => {
     expect(isSupportedMime('audio/mpeg; codecs="mp3"')).toBe(true);
     expect(isSupportedMime('audio/x-m4a')).toBe(true);
     expect(isSupportedMime('audio/x-wav')).toBe(true);
-    // Streaming / unsupported types must NOT slip through a prefix check.
+    // Containers added by Owner decision on 2026-08-20: a file served with one of
+    // these types is an ordinary progressive download.
+    expect(isSupportedMime('video/mp2t')).toBe(true);
+    expect(isSupportedMime('video/x-flv')).toBe(true);
+    expect(isSupportedMime('video/3gpp')).toBe(true);
+    expect(isSupportedMime('video/mpeg')).toBe(true);
+    expect(isSupportedMime('video/x-ms-wmv')).toBe(true);
+    // MANIFEST types are still not containers: they belong to the stream path, and a
+    // prefix check must never admit them here.
     expect(isSupportedMime('application/vnd.apple.mpegurl')).toBe(false);
     expect(isSupportedMime('audio/x-mpegurl')).toBe(false);
-    expect(isSupportedMime('video/mp2t')).toBe(false);
-    expect(isSupportedMime('video/x-flv')).toBe(false);
-    expect(isSupportedMime('video/3gpp')).toBe(false);
+    expect(isSupportedMime('application/dash+xml')).toBe(false);
     expect(isSupportedMime('')).toBe(false);
     expect(kindFromMime('video/webm')).toBe('video');
     expect(kindFromMime('audio/ogg')).toBe('audio');

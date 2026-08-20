@@ -8,6 +8,8 @@ interface E2eDownloadItem {
   readonly state: string;
   readonly bytesReceived: number;
   readonly url: string;
+  /** Absolute path the browser saved to; empty until the transfer starts. */
+  readonly filename: string;
 }
 
 interface E2eTab {
@@ -21,6 +23,7 @@ declare const chrome: {
       manifest_version: number;
       permissions?: readonly string[];
       host_permissions?: readonly string[];
+      optional_host_permissions?: readonly string[];
     };
     sendMessage(message: unknown): Promise<unknown>;
   };
@@ -35,8 +38,14 @@ declare const chrome: {
     search(filter: Record<string, unknown>): Promise<readonly E2eDownloadItem[]>;
   };
   readonly permissions: {
-    request(request: { permissions: readonly string[] }): Promise<boolean>;
-    remove(request: { permissions: readonly string[] }): Promise<boolean>;
+    request(request: {
+      permissions?: readonly string[];
+      origins?: readonly string[];
+    }): Promise<boolean>;
+    remove(request: {
+      permissions?: readonly string[];
+      origins?: readonly string[];
+    }): Promise<boolean>;
     getAll(): Promise<{ permissions?: readonly string[]; origins?: readonly string[] }>;
   };
 };

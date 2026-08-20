@@ -21,6 +21,16 @@ const VIDEO_EXTENSIONS: Readonly<Record<string, string>> = {
   mov: 'video/quicktime',
   avi: 'video/x-msvideo',
   mkv: 'video/x-matroska',
+  // Owner-directed additions (2026-08-20). Progressive containers served as ordinary
+  // files; each is a direct download, unrelated to the HLS segment usage of MPEG-TS.
+  ts: 'video/mp2t',
+  m2ts: 'video/mp2t',
+  mts: 'video/mp2t',
+  mpg: 'video/mpeg',
+  mpeg: 'video/mpeg',
+  wmv: 'video/x-ms-wmv',
+  flv: 'video/x-flv',
+  '3gp': 'video/3gpp',
 };
 
 /** Supported audio containers → canonical MIME (PROJECT_BIBLE.md §5.1). */
@@ -39,16 +49,26 @@ const EXTENSION_TO_MIME: Readonly<Record<string, string>> = {
 };
 
 /**
- * Closed allowlist of supported MIME types (§5.1): the canonical container MIMEs
- * plus documented alternates. A prefix check (`video/*`/`audio/*`) is intentionally
- * NOT used — it would wrongly admit streaming/unsupported types such as
- * `application/x-mpegurl`, `audio/x-mpegurl` (HLS) or `video/mp2t` (MPEG-TS), which
- * Phase 3 must not surface (§6, §5.5).
+ * Closed allowlist of supported MIME types: the canonical container MIMEs plus
+ * documented alternates. A prefix check (`video/*`/`audio/*`) is intentionally NOT
+ * used — it would admit manifest types such as `application/x-mpegurl` or
+ * `application/dash+xml`, which are streams rather than downloadable containers and
+ * are handled by the stream path, not by this allowlist.
+ *
+ * `video/mp2t` IS allowlisted: a `.ts`/`.m2ts`/`.mts` file served directly is an
+ * ordinary progressive download. That is independent of MPEG-TS appearing as the
+ * segment container inside an HLS manifest.
  */
 const SUPPORTED_MIMES: ReadonlySet<string> = new Set<string>([
   ...Object.values(EXTENSION_TO_MIME),
   'audio/x-m4a',
   'audio/x-wav',
+  // Alternates seen in the wild for the containers above.
+  'video/x-ms-asf',
+  'video/3gpp2',
+  'audio/mp3',
+  'video/avi',
+  'video/msvideo',
 ]);
 
 /** All supported container extensions (lowercase, no dot). */

@@ -1,0 +1,217 @@
+/**
+ * The offscreen assembly host (PROJECT_BIBLE.md §10.6, §13.8). It answers three
+ * messages and must: validate an untrusted payload, broadcast progress, abort on
+ * request, and never leave a blob URL behind when it is torn down (§8.9, §12.1).
+ */
+import { describe, expect, it, vi } from 'vitest';
+import type { HttpClient, HttpResponse } from '@platform/http';
+import type { MessageBus } from '@platform/messaging';
+import { STREAM_PROGRESS_BROADCAST } from '@platform/stream/offscreen';
+import { createStreamAssemblyHost } from '@runtime/offscreen/host';
+
+const MASTER = 'https://cdn.test/hls/index.m3u8';
+const PLAYLIST = ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXTINF:4,', 'b.ts', '#EXT-X-ENDLIST'].join(
+  '\n',
+);
+
+type Handler = (payload: unknown) => unknown;
+
+function harness(routes: Readonly<Record<string, string | Uint8Array>> = {}): {
+  readonly messaging: MessageBus;
+  readonly http: HttpClient;
+  readonly handlers: Map<string, Handler>;
+  readonly broadcasts: { type: string; payload: unknown }[];
+  readonly revoked: string[];
+  readonly unsubscribed: () => number;
+} {
+  const handlers = new Map<string, Handler>();
+  const broadcasts: { type: string; payload: unknown }[] = [];
+  const revoked: string[] = [];
+  let unsubscribes = 0;
+
+  const answer = (url: string): HttpResponse => {
+    const route = routes[url];
+    if (route === undefined) {
+      throw new Error(`unexpected request: ${url}`);
+    }
+    const body = typeof route === 'string' ? new TextEncoder().encode(route) : route;
+    return { status: 200, ok: true, headers: {}, bytes: body, url };
+  };
+
+  // The document's own globals: a page HAS object URLs, which is the entire reason
+  // this surface exists.
+  let counter = 0;
+  const scope = globalThis as unknown as {
+    URL: { createObjectURL?: unknown; revokeObjectURL?: unknown };
+  };
+  scope.URL.createObjectURL = (): string => {
+    counter += 1;
+    return `blob:aetherdl/${String(counter)}`;
+  };
+  scope.URL.revokeObjectURL = (url: string): void => {
+    revoked.push(url);
+  };
+
+  return {
+    handlers,
+    broadcasts,
+    revoked,
+    unsubscribed: () => unsubscribes,
+    http: {
+      get: (url) => Promise.resolve(answer(url)),
+      getText: (url) => Promise.resolve(new TextDecoder().decode(answer(url).bytes)),
+    },
+    messaging: {
+      on: (type: string, handler: Handler) => {
+        handlers.set(type, handler);
+        return () => {
+          unsubscribes += 1;
+        };
+      },
+      broadcast: (type: string, payload: unknown): Promise<void> => {
+        broadcasts.push({ type, payload });
+        return Promise.resolve();
+      },
+    } as unknown as MessageBus,
+  };
+}
+
+describe('offscreen assembly host', () => {
+  it('assembles on request and answers with a local URL', async () => {
+    const h = harness({
+      [MASTER]: PLAYLIST,
+      'https://cdn.test/hls/a.ts': new Uint8Array(6),
+      'https://cdn.test/hls/b.ts': new Uint8Array(4),
+    });
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    const result = await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER });
+
+    expect(result).toMatchObject({
+      byteLength: 10,
+      extension: 'ts',
+      mimeType: 'video/mp2t',
+      segmentCount: 2,
+      origins: ['https://cdn.test/*'],
+    });
+    expect(String((result as { url: string }).url)).toContain('blob:');
+  });
+
+  it('broadcasts progress as segments land, tagged with the manifest', async () => {
+    const h = harness({
+      [MASTER]: PLAYLIST,
+      'https://cdn.test/hls/a.ts': new Uint8Array(8),
+      'https://cdn.test/hls/b.ts': new Uint8Array(8),
+    });
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER });
+
+    expect(h.broadcasts).toEqual([
+      {
+        type: STREAM_PROGRESS_BROADCAST,
+        payload: { manifestUrl: MASTER, segmentsDone: 1, segmentsTotal: 2, bytesReceived: 8 },
+      },
+      {
+        type: STREAM_PROGRESS_BROADCAST,
+        payload: { manifestUrl: MASTER, segmentsDone: 2, segmentsTotal: 2, bytesReceived: 16 },
+      },
+    ]);
+  });
+
+  it('revokes exactly the URL a release names', async () => {
+    const h = harness({
+      [MASTER]: PLAYLIST,
+      'https://cdn.test/hls/a.ts': new Uint8Array(1),
+      'https://cdn.test/hls/b.ts': new Uint8Array(1),
+    });
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    const result = (await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER })) as {
+      url: string;
+    };
+    await h.handlers.get('stream/release')?.({ url: result.url });
+
+    expect(h.revoked).toEqual([result.url]);
+  });
+
+  it('refuses a payload that carries no manifest URL (§13.8)', async () => {
+    const h = harness();
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    await expect(h.handlers.get('stream/assemble')?.({ nope: 1 })).rejects.toMatchObject({
+      code: 'stream-request-invalid',
+    });
+    await expect(h.handlers.get('stream/assemble')?.(undefined)).rejects.toMatchObject({
+      code: 'stream-request-invalid',
+    });
+  });
+
+  it('ignores a release for a URL it never handed out', async () => {
+    const h = harness();
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    await h.handlers.get('stream/release')?.({ url: 'blob:someone-elses' });
+    await h.handlers.get('stream/release')?.({});
+
+    expect(h.revoked).toEqual([]);
+  });
+
+  it('aborts a running assembly when told to, and frees nothing it never made', async () => {
+    let resolveSecond: ((response: HttpResponse) => void) | undefined;
+    const h = harness({ [MASTER]: PLAYLIST });
+    const http: HttpClient = {
+      getText: () => Promise.resolve(PLAYLIST),
+      get: (url) => {
+        if (url.endsWith('a.ts')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            headers: {},
+            bytes: new Uint8Array(2),
+            url,
+          });
+        }
+        return new Promise<HttpResponse>((resolve) => {
+          resolveSecond = resolve;
+        });
+      },
+    };
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http });
+    host.start();
+
+    const pending = h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER });
+    // Let the first segment land so the abort arrives mid-assembly.
+    await vi.waitFor(() => {
+      expect(h.broadcasts.length).toBeGreaterThan(0);
+    });
+    await h.handlers.get('stream/abort')?.({ manifestUrl: MASTER });
+    resolveSecond?.({ status: 200, ok: true, headers: {}, bytes: new Uint8Array(2), url: 'x' });
+
+    await expect(pending).rejects.toMatchObject({ code: 'stream-aborted' });
+    expect(h.revoked).toEqual([]);
+  });
+
+  it('releases every held URL and detaches its handlers on dispose', async () => {
+    const h = harness({
+      [MASTER]: PLAYLIST,
+      'https://cdn.test/hls/a.ts': new Uint8Array(1),
+      'https://cdn.test/hls/b.ts': new Uint8Array(1),
+    });
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    const result = (await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER })) as {
+      url: string;
+    };
+    await host.dispose();
+
+    expect(h.revoked).toEqual([result.url]);
+    expect(h.unsubscribed()).toBe(4);
+  });
+});

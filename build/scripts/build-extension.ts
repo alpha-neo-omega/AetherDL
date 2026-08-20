@@ -61,6 +61,7 @@ async function finalize(ctx: BuildContext): Promise<void> {
 
   await copyFile(resolve(runtime, 'popup', 'index.html'), resolve(outDir, 'popup.html'));
   await copyFile(resolve(runtime, 'settings', 'index.html'), resolve(outDir, 'settings.html'));
+  await copyFile(resolve(runtime, 'offscreen', 'index.html'), resolve(outDir, 'offscreen.html'));
 
   const manifest = generateManifest(ctx);
   await writeFile(

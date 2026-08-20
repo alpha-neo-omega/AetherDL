@@ -164,7 +164,13 @@ test.describe('release artifacts', () => {
     try {
       const manifest = await extension.worker.evaluate(() => chrome.runtime.getManifest());
       expect(manifest.manifest_version).toBe(3);
-      expect(manifest.permissions).toEqual(['storage', 'downloads', 'activeTab', 'scripting']);
+      expect(manifest.permissions).toEqual([
+        'storage',
+        'downloads',
+        'activeTab',
+        'scripting',
+        'offscreen',
+      ]);
 
       const popup = await extension.page('popup.html');
       await expect(popup.locator('.adl-toolbar')).toBeVisible();

@@ -78,9 +78,22 @@ test.describe('AetherDL in Chromium', () => {
     const manifest = await extension.worker.evaluate(() => chrome.runtime.getManifest());
 
     expect(manifest.manifest_version).toBe(3);
-    expect(manifest.permissions).toEqual(['storage', 'downloads', 'activeTab', 'scripting']);
-    // No host permissions at install (§13.7).
+    // `offscreen` is the one Chromium addition: a service worker needs a context
+    // that can build a blob URL for an assembled stream (§10.6). It grants no host
+    // access and is invisible in the install prompt.
+    expect(manifest.permissions).toEqual([
+      'storage',
+      'downloads',
+      'activeTab',
+      'scripting',
+      'offscreen',
+    ]);
+    // Still no host permission granted at install: the stream pattern is optional
+    // and asked for at point of use (§13.7).
     expect(manifest.host_permissions ?? []).toEqual([]);
+    expect(
+      (manifest as unknown as { optional_host_permissions?: string[] }).optional_host_permissions,
+    ).toEqual(['*://*/*']);
   });
 
   test('opens the popup and renders a state', async () => {
@@ -163,6 +176,26 @@ test.describe('AetherDL in Chromium', () => {
     ).toBe('');
 
     await other.close();
+    await popup.close();
+  });
+
+  test('the popup keeps a usable width even when the viewport reports almost none', async () => {
+    // Regression: a bare `max-inline-size: 100vw` collapsed the panel to a sliver,
+    // because a popup is measured from its own content and the reported viewport can
+    // be a few pixels wide before layout. 380px normally; never a sliver.
+    const popup = await extension.page('popup.html');
+    const width = (): Promise<number> =>
+      popup.evaluate(() => document.querySelector('.adl-popup')?.clientWidth ?? 0);
+
+    await popup.setViewportSize({ width: 1280, height: 800 });
+    expect(await width()).toBe(380);
+
+    await popup.setViewportSize({ width: 400, height: 600 });
+    expect(await width()).toBe(380);
+
+    await popup.setViewportSize({ width: 120, height: 400 });
+    expect(await width()).toBeGreaterThanOrEqual(320);
+
     await popup.close();
   });
 

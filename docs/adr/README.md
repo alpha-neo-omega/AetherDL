@@ -12,4 +12,13 @@ This directory holds **future** ADRs authored under the change-control process
 3. Obtain Project Owner approval; mark `Accepted` and record approval.
 4. If the decision changes architecture, amend PROJECT_BIBLE.md and increment its version.
 
+## Accepted ADRs in this directory
+
+| ADR | Title | Date |
+| --- | --- | --- |
+| [ADR-008](008-web-ext-for-firefox-e2e.md) | `web-ext` for Firefox e2e | 2026-08-19 |
+| [ADR-009](009-axe-core-for-accessibility-tests.md) | `axe-core` for accessibility tests | 2026-08-19 |
+| [ADR-010](010-non-drm-stream-assembly.md) | Non-DRM HLS/DASH assembly, and the network claim | 2026-08-20 |
+
 > ADRs here never supersede PROJECT_BIBLE.md. An accepted ADR is applied by amending the Bible.
+> ADR-010 has been applied that way: the Bible is at version 1.1.0, with §14.3 amended.

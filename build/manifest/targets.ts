@@ -7,7 +7,9 @@
  *          permission allow-list (PROJECT_BIBLE.md §13.3).
  * Restrictions: Build tooling only; no product logic.
  * Public API: Target, BuildMode, BuildContext, TARGETS, BASELINE_PERMISSIONS,
- *          optionalPermissionsFor, FIREFOX_ADDON_ID, FIREFOX_MIN_VERSION.
+ *          permissionsFor, optionalPermissionsFor, STREAM_HOST_PATTERN,
+ *          optionalHostPermissionsFor, hostPermissionsFor, FIREFOX_ADDON_ID,
+ *          FIREFOX_MIN_VERSION.
  */
 
 /** Chromium family (Chrome, Edge, Brave, Opera, Vivaldi) collapses to `chrome`. */
@@ -50,6 +52,52 @@ export const BASELINE_PERMISSIONS: readonly string[] = [
  */
 export function optionalPermissionsFor(target: Target): readonly string[] {
   return target === 'firefox' ? ['notifications'] : ['notifications', 'contextMenus'];
+}
+
+/**
+ * Install-time permissions per target. Chromium adds `offscreen`: a Chromium MV3
+ * service worker cannot create the `blob:` URL that hands an assembled stream to the
+ * download manager, so assembly runs in an offscreen document (§10.6, §7.4). The
+ * permission is not user-visible in the install prompt and grants no host access.
+ * Firefox needs nothing extra — its event page has the DOM APIs already.
+ */
+export function permissionsFor(target: Target): readonly string[] {
+  return target === 'firefox' ? BASELINE_PERMISSIONS : [...BASELINE_PERMISSIONS, 'offscreen'];
+}
+
+/**
+ * The host pattern stream assembly needs. Segments of one stream are routinely spread
+ * across CDNs the manifest only names at read time, so no narrower pattern can be
+ * declared up front. It is declared OPTIONAL and requested at point of use, on a user
+ * gesture, for the specific origins in play — never taken at install (§13.7, §4.15).
+ */
+export const STREAM_HOST_PATTERN = '*://*/*';
+
+/**
+ * Both targets keep the pattern in `optional_host_permissions`, which is granted only
+ * when the user is asked and agrees (§13.7).
+ *
+ * Firefox was measured, not assumed: a build declaring the pattern under
+ * `host_permissions` came back from `permissions.getAll()` with the origin ALREADY
+ * GRANTED at install. Whatever the intent of Firefox's "optional by default" model,
+ * that is an install-time grant of access to every site, so that route is not used.
+ *
+ * The cost is stated rather than hidden: Firefox added `optional_host_permissions` in
+ * Firefox 128, so on Firefox 115–127 (inside the supported range, §7.1) the pattern
+ * cannot be requested at all and stream assembly is simply unavailable — the download
+ * fails with a permission error instead of silently taking access. Progressive
+ * downloads, which need no host permission, are unaffected.
+ */
+export function optionalHostPermissionsFor(_target: Target): readonly string[] {
+  return [STREAM_HOST_PATTERN];
+}
+
+/**
+ * No target declares install-time host permissions (§13.7). Kept as the single place
+ * that says so, and enforced by the packaging validator and the security gate.
+ */
+export function hostPermissionsFor(_target: Target): readonly string[] {
+  return [];
 }
 
 /** Firefox requires a stable add-on id for several WebExtension APIs. */

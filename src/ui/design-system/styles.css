@@ -37,11 +37,18 @@ body {
 
 /* ---- Popup shell (§11.16 responsive within the browser popup viewport) ---- */
 
+/*
+ * The cap keeps the panel inside a genuinely narrow viewport, but a bare `100vw` cap
+ * let the popup collapse to a sliver: a browser popup is measured from its own
+ * content, and in that context the reported viewport can be a few pixels wide before
+ * the panel is laid out. The floor makes the cap yield to a usable minimum instead of
+ * to nothing, while a normal popup still renders at exactly 380px (§11.16).
+ */
 .adl-popup {
   display: flex;
   flex-direction: column;
   inline-size: 380px;
-  max-inline-size: 100vw;
+  max-inline-size: max(320px, 100vw);
   max-block-size: 600px;
   min-block-size: 220px;
   overflow: hidden;

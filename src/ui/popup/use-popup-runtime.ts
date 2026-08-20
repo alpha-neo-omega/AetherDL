@@ -129,6 +129,10 @@ export function usePopupRuntime(
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [reloadToken, setReloadToken] = useState(0);
   const tabIdRef = useRef<number | undefined>(undefined);
+  // The latest detected items, readable from the action callbacks without making
+  // `actions` depend on them (which would rebuild every handler on each detection).
+  const itemsRef = useRef<readonly MediaItem[]>([]);
+  itemsRef.current = state.items;
 
   const refreshQueue = useCallback((): void => {
     void client.queryQueue().then(
@@ -221,9 +225,27 @@ export function usePopupRuntime(
         setReloadToken((token) => token + 1);
       },
       download: (itemIds) => {
-        if (itemIds.length > 0) {
-          run(client.enqueue(itemIds));
+        if (itemIds.length === 0) {
+          return;
         }
+        const wanted = new Set(itemIds);
+        const urls = itemsRef.current.filter((item) => wanted.has(item.id)).map((item) => item.url);
+        // First call in the handler, so the user gesture is still live: a stream is
+        // read by the extension itself and needs access to its host, which is asked
+        // for here and nowhere else (§13.7, §4.15). Progressive files need nothing.
+        run(
+          client.requestStreamAccess(urls).then((granted) => {
+            if (!granted) {
+              throw {
+                category: 'permission',
+                code: 'popup-stream-host-denied',
+                messageKey: 'error.permission.host',
+                retryable: true,
+              } satisfies AppError;
+            }
+            return client.enqueue(itemIds);
+          }),
+        );
       },
       cancel: (taskId) => {
         run(client.cancel(taskId));

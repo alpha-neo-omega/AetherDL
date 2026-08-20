@@ -62,15 +62,20 @@ describe('bundle budgets: the shipped surfaces', () => {
       content: 40 * KB,
       popup: 200 * KB,
       settings: 200 * KB,
+      // §12.1 predates the assembly document, which it therefore does not name. It
+      // carries no UI and no React — parsers and adapters only — so it is held to
+      // the same 40 kB the content script gets rather than to a UI budget (ADR-010).
+      offscreen: 40 * KB,
     });
   });
 
-  it('measures exactly the four shipped surfaces', () => {
+  it('measures exactly the five shipped surfaces', () => {
     expect(SURFACES.map((entry) => entry.entry)).toEqual([
       'background.js',
       'content.js',
       'popup.js',
       'settings.js',
+      'offscreen.js',
     ]);
   });
 });
@@ -189,6 +194,7 @@ describe('bundle budgets: payload measurement', () => {
       'content',
       'popup',
       'settings',
+      'offscreen',
     ]);
     expect(payloads.every((payload) => payload.withinBudget)).toBe(true);
   });

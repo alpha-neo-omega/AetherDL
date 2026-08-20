@@ -335,6 +335,10 @@
     "message": "AetherDL needs the downloads permission to save files.",
     "description": "Popup: error.permission"
   },
+  "error_permission_host": {
+    "message": "AetherDL needs access to the media host to download a stream. Nothing is downloaded without it.",
+    "description": "Popup: error.permission.host"
+  },
   "error_capability": {
     "message": "Not supported in this browser.",
     "description": "Popup: error.capability"
@@ -616,7 +620,7 @@
     "description": "Settings: about.shortcutHint"
   },
   "about_privacy": {
-    "message": "AetherDL works entirely on this device. It has no account, no telemetry and makes no network calls of its own.",
+    "message": "AetherDL has no account, no telemetry and sends nothing anywhere. It reads a playlist and its segments only to download what you asked for, on hosts you granted.",
     "description": "Settings: about.privacy"
   },
   "history_title": {

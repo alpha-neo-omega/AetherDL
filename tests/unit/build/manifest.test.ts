@@ -14,6 +14,7 @@ import { generateManifest } from '../../../build/manifest/generate';
 import {
   BASELINE_PERMISSIONS,
   FIREFOX_ADDON_ID,
+  STREAM_HOST_PATTERN,
   FIREFOX_DATA_COLLECTION_PERMISSIONS,
   FIREFOX_MIN_VERSION,
 } from '../../../build/manifest/targets';
@@ -30,8 +31,10 @@ const REQUIRED = [
   'content.js',
   'popup.js',
   'settings.js',
+  'offscreen.js',
   'popup.html',
   'settings.html',
+  'offscreen.html',
   'assets/styles.css',
   'icons/icon-16.png',
   'icons/icon-32.png',
@@ -88,12 +91,24 @@ describe('Firefox manifest metadata (§22.11)', () => {
     ]);
   });
 
-  it('adds no permission and no host permission', () => {
+  it('takes no install-time permission beyond the baseline', () => {
     const manifest = firefox();
 
+    // No `offscreen`: a Firefox event page has the DOM APIs a Chromium service
+    // worker lacks, so it assembles in place (§7.4).
     expect(manifest.permissions).toEqual([...BASELINE_PERMISSIONS]);
     expect(manifest.optional_permissions).toEqual(['notifications']);
-    expect((manifest as { host_permissions?: unknown }).host_permissions).toBeUndefined();
+  });
+
+  it('keeps the stream host pattern optional, never granted at install (§13.7)', () => {
+    const manifest = firefox();
+
+    // Measured, not assumed: a Firefox build that declared this pattern under
+    // `host_permissions` had it ALREADY GRANTED at install, so it lives in
+    // `optional_host_permissions` on both targets instead (see targets.ts).
+    expect(manifest.optional_host_permissions).toEqual([STREAM_HOST_PATTERN]);
+    expect(manifest.host_permissions).toBeUndefined();
+    expect(manifest.permissions).not.toContain(STREAM_HOST_PATTERN);
   });
 });
 
@@ -107,10 +122,21 @@ describe('Chromium manifest stays free of Firefox-only metadata (§7.6)', () => 
   it('keeps its own permission set and CSP', () => {
     const manifest = chrome();
 
-    expect(manifest.permissions).toEqual([...BASELINE_PERMISSIONS]);
+    // `offscreen` is Chromium-only and grants no host access: it is how a service
+    // worker gets a context that can build a blob URL for an assembled stream (§10.6).
+    expect(manifest.permissions).toEqual([...BASELINE_PERMISSIONS, 'offscreen']);
     expect(manifest.optional_permissions).toEqual(['notifications', 'contextMenus']);
     expect(manifest.content_security_policy.extension_pages).toContain("script-src 'self'");
     expect(manifest.content_security_policy.extension_pages).toContain("object-src 'none'");
+  });
+
+  it('keeps the stream host pattern optional, never granted at install (§13.7)', () => {
+    const manifest = chrome();
+
+    expect(manifest.optional_host_permissions).toEqual([STREAM_HOST_PATTERN]);
+    // An MV3 `host_permissions` entry on Chromium IS an install-time grant; there
+    // must be none, on any pattern.
+    expect(manifest.host_permissions).toBeUndefined();
   });
 
   it('carries the same version as Firefox — one source, synchronized (§18.7)', () => {

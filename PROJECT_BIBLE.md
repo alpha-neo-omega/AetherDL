@@ -29,11 +29,18 @@
 | **Tagline** | Fast. Private. Powerful. |
 | **Classification** | Internal Engineering Handbook — Authoritative |
 | **Status** | Ratified / Active |
-| **Version** | 1.0.0 |
+| **Version** | 1.1.0 |
 | **Stability** | **STATIC** — architecture is frozen; changes require Project Owner approval |
 | **Owner** | Project Owner (AetherDL) |
 | **Audience** | Engineers, Reviewers, AI Implementation Agents, Maintainers, QA, Security |
-| **Supersedes** | None (initial ratified edition) |
+| **Supersedes** | 1.0.0 (initial ratified edition) |
+
+### Amendment Record
+
+| Version | Date | ADR | What changed |
+|---|---|---|---|
+| 1.0.0 | 2026-08-19 | — | Initial ratified edition |
+| 1.1.0 | 2026-08-20 | [ADR-010](docs/adr/010-non-drm-stream-assembly.md) | Non-DRM HLS/DASH stream assembly implemented. §14.3 amended: the extension now performs the read requests a stream download requires, and still transmits nothing. Also amended: §2.6 (metric restated), §5.1 (containers added), §7.4 (assembly context per engine), §10.6 (implemented limits recorded), §12.1 (assembly-document budget), §13.3 (`offscreen`; host-permission declaration), §22.11 acceptance wording, §24 (ADR-010 listed). §14.1 and §25.3 are untouched: no analytics, telemetry, tracking, data collection, cloud, backend, accounts or identifiers, and the DRM boundary, all remain permanent and unchanged. Owner-approved 2026-08-20 |
 
 ### Amendment Policy
 
@@ -228,7 +235,8 @@ manual testing, not by observing users in the field.
 | Download start latency | ≤ 200 ms from click to browser download | Download benchmarks |
 | Crash-free sessions | 100% in test matrix | Regression suite |
 | Telemetry endpoints | **0** | Static analysis / network audit |
-| External network calls by the extension itself | **0** | Network audit ([§14 Privacy](#14-privacy)) |
+| Data transmitted by the extension itself | **0 bytes** | Network audit ([§14 Privacy](#14-privacy)) — nothing is ever sent |
+| Network calls by the extension itself | **only** the reads a stream download requires, on user-granted origins ([§14.3](#143-external-network-calls-by-the-extension)) | Network audit; the release security gate confines `fetch` to one adapter and proves no UI surface can reach it |
 | Accessibility | WCAG 2.1 **AA** pass | [§17 Accessibility](#17-accessibility) |
 | Unit test coverage (core logic) | ≥ 90% statements/branches | [§16 Testing](#16-testing) |
 
@@ -665,6 +673,11 @@ using the mechanisms in [§9](#9-detection-system) and [§10](#10-download-syste
 | MOV | `video/quicktime` | Supported as a direct/progressive download |
 | AVI | `video/x-msvideo` | Supported as a direct download |
 | MKV | `video/x-matroska` | Supported as a direct download |
+| TS / M2TS / MTS | `video/mp2t` | MPEG-TS. Supported as a direct download, and the container HLS assembly produces from MPEG-TS segments ([§10.6](#106-stream-assembly)). Added in Bible 1.1.0 |
+| MPG / MPEG | `video/mpeg` | Supported as a direct download. Added in Bible 1.1.0 |
+| WMV | `video/x-ms-wmv`, `video/x-ms-asf` | Supported as a direct download. Added in Bible 1.1.0 |
+| FLV | `video/x-flv` | Supported as a direct download. Added in Bible 1.1.0 |
+| 3GP | `video/3gpp`, `video/3gpp2` | Supported as a direct download. Added in Bible 1.1.0 |
 
 **Audio containers:**
 
@@ -849,6 +862,7 @@ Firefox supports MV3 but differs from Chromium in important ways. The Platform L
 | Host permissions prompt | At install / optional | More granular user controls | Optional permissions requested at point-of-use ([§13.3](#133-permission-strategy)). |
 | CSP defaults | MV3 strict | MV3 strict | Same strict CSP policy ([§13.2](#132-content-security-policy)). |
 | Downloads API nuances | `chrome.downloads` | `browser.downloads` | Abstracted; per-target filename/conflict handling normalized ([§10.8](#108-browser-downloads-api)). |
+| Assembly context (Bible 1.1.0) | A service worker has no `Blob` URL factory, so assembly runs in an **offscreen document** (`offscreen` permission; exchanges only a manifest URL out and a local URL back) | The event page has the DOM APIs, so it assembles **in place**; there is no offscreen API and none is needed | One contract, two implementations, selected by a **capability check** — never by a browser name ([§7.2](#72-graceful-degradation), [§10.6](#106-stream-assembly)). |
 
 > [!NOTE]
 > Firefox behavior parity is a **support requirement**, not an afterthought. Any feature that
@@ -1711,7 +1725,27 @@ For **non-DRM** HLS/DASH ([§5.5](#55-progressive-streams--adaptive-manifests)):
 **Hard limits (MUST):**
 - If encryption/DRM is present at any point (`#EXT-X-KEY` real key system, DASH `ContentProtection`,
   EME), assembly **MUST** abort and the item is reclassified **unsupported** ([§6](#6-unsupported-content)).
+  The refusal **MUST** happen before any segment is fetched, and a key URI **MUST NOT** be read,
+  followed, returned or logged.
 - No key acquisition, no decryption, ever. This is a permanent boundary ([§3.2](#32-why-non-goals-are-permanent)).
+- Assembly **MUST** reach the network only through the single read-only adapter, under the
+  constraints of [§14.3](#143-external-network-calls-by-the-extension), on origins the user granted
+  at point of use ([§13.7](#137-least-privilege-model)).
+- The assembled bytes **MUST** be handed to the browser's own download manager for writing
+  ([§10.8](#108-browser-downloads-api)); assembly never writes a file itself.
+
+**Recorded limits of the implementation (Bible 1.1.0, [ADR-010](docs/adr/010-non-drm-stream-assembly.md)):**
+
+| Limit | Status |
+|---|---|
+| Encryption | Refused at classification, at download validation, and inside the parsers |
+| Live streams | **Not downloadable** — a live playlist has no end. Reported as live, not attempted |
+| Resumability | **Not implemented.** §10.6 says "resumable where feasible"; it is not feasible for an in-memory assembly and is not claimed. Assembly is cancelable, which is required |
+| Memory | Assembled in memory, refused past **1 GiB**; per-segment ceiling 64 MiB |
+| Remuxing | **None.** MPEG-TS segments concatenate to `.ts`, fMP4 segments to `.mp4` |
+| Rendition | Highest bandwidth only; no per-stream quality picker yet ([§9.8](#98-quality-detection) applies to detection) |
+| Segment fetching | Sequential (bounded concurrency of one): playlist order is file order, and peak memory stays one segment plus what is kept |
+| Firefox 115–127 | Streams **cannot** be downloaded there: `optional_host_permissions` requires Firefox 128, and taking host access at install instead is forbidden ([§13.3](#133-permission-strategy)). Degrades gracefully per [§7.4](#74-firefox-compatibility); progressive downloads are unaffected |
 
 ### 10.7 Filename Generation
 
@@ -1924,6 +1958,7 @@ and manual checks on reference hardware; none are measured by observing real use
 | Popup bundle size (gz) | ≤ 200 KB | UI code path; enforced at build ([§8.15](#815-build--packaging-architecture)) |
 | Background bundle size (gz) | ≤ 150 KB | Keep cold start fast |
 | Content script size (gz) | ≤ 40 KB | Injected on pages; must be tiny |
+| Assembly document size (gz) | ≤ 40 KB | Bible 1.1.0: the Chromium offscreen surface ([§10.6](#106-stream-assembly)). Parsers and adapters only — no UI, no React — so it is held to the content script's budget, not a UI budget |
 | Idle background CPU | ~0% | No timers/polling when idle ([§12.7](#127-garbage-collection--cleanup)) |
 | Idle background memory | ≤ 25 MB | Resident when idle |
 | Detection latency (typical) | ≤ 300 ms | Request → results ([§9.3](#93-detection-pipeline)) |
@@ -2020,6 +2055,7 @@ Every security decision below is deliberate and permanent unless amended ([§25]
 | `downloads` | Native downloads ([§10.8](#108-browser-downloads-api)) | Core function; required |
 | `activeTab` | Act on the tab the user is viewing, on gesture | Broad host perms (rejected) |
 | `scripting` | Programmatic content-script injection (least privilege) | Static-only injection (insufficient) |
+| `offscreen` (Chromium only) | Bible 1.1.0: opens an extension-owned document so a service worker can build the local file handle a stream download needs ([§10.6](#106-stream-assembly), [§7.4](#74-firefox-compatibility)). Grants access to **nothing** — no host, no data, no user-visible capability; absent on Firefox, whose event page needs none | Sending assembled bytes across runtime messaging (lossy and memory-hostile); writing the file ourselves (rejected — [§10.8](#108-browser-downloads-api) keeps the browser as the writer) |
 
 **Optional / on-demand permissions (requested at point-of-use where supported):**
 
@@ -2027,11 +2063,26 @@ Every security decision below is deliberate and permanent unless amended ([§25]
 |---|---|---|
 | `contextMenus`/`menus` | Context menu ([§4.13](#413-context-menu)) | User enables the feature |
 | `notifications` | Completion/failure alerts ([§4.10](#410-notifications)) | User enables notifications |
-| Host permissions (specific origins) | Deeper detection on a site the user chooses | User explicitly grants for that site |
+| Host permissions (specific origins) | Deeper detection on a site the user chooses; reading a stream's manifest and segments ([§10.6](#106-stream-assembly)) | User explicitly grants for that origin, on the gesture that starts the download |
 
 > [!IMPORTANT]
 > AetherDL **MUST NOT** request `<all_urls>` or broad host permissions at install. Broad access,
 > if ever needed, is requested **per user action, per origin**, and can be revoked ([§4.15](#415-permission-management)).
+
+**Host-permission declaration (Bible 1.1.0, [ADR-010](docs/adr/010-non-drm-stream-assembly.md)).**
+A manifest can only *request* an origin it has declared, and a playlist names its segment hosts only
+when it is read, so no narrower pattern can be declared in advance. Therefore:
+
+- Both targets declare `optional_host_permissions: ["*://*/*"]`. A declaration is **not** a grant.
+- Neither target declares `host_permissions`. **MUST NOT**: on Chromium MV3 that key is an
+  install-time grant, and on Firefox MV3 it was **measured** granting the origin at install
+  (`permissions.getAll()` reported it), which is precisely what this section forbids.
+- The **request** names only the origins the chosen stream actually uses, and is issued on the user's
+  gesture. The active tab's own origin is not requested at all — `activeTab` already covers it.
+- Declining cancels that one download and nothing else. Every grant is revocable
+  ([§4.15](#415-permission-management)).
+- Consequence, accepted and documented: Firefox 115–127 lacks `optional_host_permissions`, so stream
+  downloads are unavailable there rather than taken silently ([§7.4](#74-firefox-compatibility)).
 
 ### 13.4 No Remote Code / No eval / No Inline Scripts
 
@@ -2087,8 +2138,10 @@ Every security decision below is deliberate and permanent unless amended ([§25]
 ## 14. Privacy
 
 AetherDL is **privacy-first by architecture**, not by policy promise. The strongest guarantee is
-structural: there is no code path that sends user data anywhere, because there is no server and no
-network egress from the extension itself.
+structural: there is no code path that **sends** user data anywhere, because there is no server, no
+account and no transmitting code at all. The extension does make read requests of its own, and only
+of one kind — the manifest and segments a stream download the user asked for cannot be performed
+without ([§14.3](#143-external-network-calls-by-the-extension)).
 
 ### 14.1 Privacy Guarantees (all MUST hold)
 
@@ -2113,14 +2166,47 @@ network egress from the extension itself.
 There is **no** user identifier, install ID, device ID, or fingerprint anywhere in this table —
 by design.
 
-### 14.3 No External Network Calls by the Extension
+### 14.3 External Network Calls by the Extension
 
-- The **extension's own code** makes **zero** network calls to first- or third-party servers.
-- Network activity is limited to: (a) the **user-initiated downloads** the browser performs, and
-  (b) least-privilege **observation** of the page's existing media requests for detection
-  ([§12.6](#126-network-interception-for-detection)). Neither transmits user data anywhere.
-- This is verifiable via a network audit ([§2.6](#26-success-metrics)) and enforced by the
-  no-remote-code rule ([§13.4](#134-no-remote-code--no-eval--no-inline-scripts)).
+> Amended in Bible 1.1.0 per [ADR-010](docs/adr/010-non-drm-stream-assembly.md). Before this
+> amendment this section read "zero network calls". Implementing non-DRM stream assembly
+> ([§10.6](#106-stream-assembly)) made that false, because a playlist is not a file: downloading a
+> stream requires the extension to read the manifest and its segments itself. The claim is narrowed
+> to what the code does rather than left standing.
+
+**The extension MUST NOT transmit anything, ever.** No analytics, telemetry, beacon, socket, crash
+report, remote configuration, account traffic or user data leaves the device, and no setting may
+enable any ([§14.1](#141-privacy-guarantees-all-must-hold), permanent under
+[§25.3](#253-non-amendable-items)).
+
+**Permitted network activity, exhaustively:**
+
+1. The **user-initiated downloads** the browser's own download manager performs
+   ([§10.8](#108-browser-downloads-api)).
+2. **Read-only `GET` requests for stream assembly** ([§10.6](#106-stream-assembly)): the manifest,
+   and the segments it names, for a download the user asked for.
+3. Least-privilege **observation** of the page's existing media requests for detection
+   ([§12.6](#126-network-interception-for-detection)), which issues no request of its own.
+
+**Constraints on (2) — all MUST:**
+
+- **One door.** Exactly one adapter may reach the network (`platform/http`). No other module, and no
+  UI surface, may perform or transitively reach a network call.
+- **Reads only.** `GET` only; no other method, no request body.
+- **No identity.** `credentials: 'omit'` and `cache: 'no-store'`: no cookies, tokens, headers or
+  identifiers are attached, so a request carries nothing about the user.
+- **`http(s)` only**, validated before the request is issued ([§13.5](#135-safe-url-validation)).
+- **User-granted origins only**, requested at point of use, per origin
+  ([§13.3](#133-permission-strategy), [§13.7](#137-least-privilege-model)).
+- **Bounded.** Per-request timeout, per-response and per-download size ceilings.
+- **Never for anything else.** A network call for any purpose other than assembling a download the
+  user asked for is a project-level failure, not a design option.
+
+This is verifiable via a network audit ([§2.6](#26-success-metrics)), enforced mechanically by the
+release security gate ([§13.10](#1310-security-review-gate)) — which fails the build if a network
+API appears outside that one adapter, or if the popup, settings or content-script payload can reach
+it — and bounded by the no-remote-code rule
+([§13.4](#134-no-remote-code--no-eval--no-inline-scripts)).
 
 ### 14.4 Data Ownership & Erasure
 
@@ -2728,9 +2814,11 @@ flowchart LR
 
 - **Objectives:** Ship to stores with per-target packages.
 - **Deliverables:** [Versioned](#187-versioning) release; per-target [packaged artifacts](#815-build--packaging-architecture);
-  store listings/assets; `CHANGELOG.md`; final [security](#1310-security-review-gate) + [privacy audit](#143-no-external-network-calls-by-the-extension).
+  store listings/assets; `CHANGELOG.md`; final [security](#1310-security-review-gate) + [privacy audit](#143-external-network-calls-by-the-extension).
 - **Acceptance Criteria:** Packages validate for Chrome Web Store, Edge Add-ons, Firefox AMO, and
-  Chromium-compatible stores; zero telemetry/network egress confirmed; permissions minimal & justified.
+  Chromium-compatible stores; **zero data transmitted** confirmed, and any network read confined to
+  stream assembly under [§14.3](#143-external-network-calls-by-the-extension); permissions minimal &
+  justified.
 - **DoD:** Release approved by Owner; artifacts submitted via official stores only ([N17](#31-definitive-non-goals)).
 
 ### 22.12 Phase Gate Summary
@@ -2848,13 +2936,35 @@ Owner Approval: <required for Accepted>
   never handle keys/decryption.
 - **Consequences:** Best reliability for the common case; strict, permanent DRM boundary ([§6](#6-unsupported-content)).
 
-### ADR-006: Local-Only, Zero-Egress Privacy Architecture
+### ADR-006: Local-Only, Zero-Transmission Privacy Architecture
 
-- **Status:** Accepted.
+- **Status:** Accepted; amended by [ADR-010](docs/adr/010-non-drm-stream-assembly.md) (Bible 1.1.0).
 - **Context:** Privacy-first is a core identity ([§14](#14-privacy)).
-- **Decision:** No backend, no telemetry, no external calls by the extension's own code; all data
-  local and user-owned; "no telemetry" made auditable by structure.
+- **Decision:** No backend, no telemetry, **nothing transmitted** by the extension's own code; all
+  data local and user-owned; "no telemetry" made auditable by structure. As amended: the extension's
+  own code may perform read-only `GET` requests, and only to assemble a stream download the user
+  asked for, under the constraints of [§14.3](#143-external-network-calls-by-the-extension). The
+  original wording "no external calls" is superseded; the no-transmission half is permanent
+  ([§25.3](#253-non-amendable-items)).
 - **Consequences:** Success metrics measured in dev/QA, never by observing users ([§2.6](#26-success-metrics)).
+  The constraint is mechanical, not asserted: one adapter may reach the network, and the release gate
+  fails the build if any other module or UI surface can.
+
+### ADR-010: Non-DRM Stream Assembly, and the Network Claim
+
+- **Status:** Accepted. Owner approval 2026-08-20.
+- **Full record:** [`docs/adr/010-non-drm-stream-assembly.md`](docs/adr/010-non-drm-stream-assembly.md).
+- **Context:** [§10.6](#106-stream-assembly) specifies assembly for non-DRM HLS/DASH; it was
+  unimplemented through product 1.0.0, and implementing it means the extension must read a playlist
+  and its segments itself — which the old §14.3 forbade.
+- **Decision:** Implement assembly for non-encrypted HLS/DASH; refuse encryption before any segment
+  is fetched and never touch a key; route every request through one read-only adapter; keep the
+  browser as the writer of the file; assemble in an offscreen document on Chromium and in place on
+  Firefox; request host access per origin on the user's gesture; and amend §14.3 to state what the
+  code does instead of leaving a false claim standing.
+- **Consequences:** Streams are downloadable on both engines; the privacy claim is narrower and
+  mechanically enforced. Costs: no live streams, no resumability, in-memory 1 GiB ceiling, no
+  remuxing, and no stream downloads on Firefox 115–127.
 
 ---
 

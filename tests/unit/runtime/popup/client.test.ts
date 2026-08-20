@@ -162,3 +162,76 @@ describe('runtime/popup client adapter', () => {
     });
   });
 });
+
+describe('runtime/popup client — host access for stream downloads (§13.7)', () => {
+  it('asks only for the origins of the manifests in the selection', async () => {
+    const { fake, client } = setup();
+
+    const granted = await client.requestStreamAccess([
+      'https://cdn.test/hls/master.m3u8',
+      'https://cdn.test/hls/other.m3u8',
+      'https://dash.test/vod/manifest.mpd',
+      // A progressive file is saved by the browser and needs nothing from us.
+      'https://files.test/clip.mp4',
+    ]);
+
+    expect(granted).toBe(true);
+    // One entry per ORIGIN, not per URL, and no pattern for the plain file.
+    expect([...fake.grantedOrigins].sort()).toEqual(['https://cdn.test/*', 'https://dash.test/*']);
+  });
+
+  it('asks for nothing at all when no manifest is involved', async () => {
+    const { fake, client } = setup();
+
+    const granted = await client.requestStreamAccess([
+      'https://files.test/clip.mp4',
+      'https://files.test/song.mp3',
+    ]);
+
+    expect(granted).toBe(true);
+    expect([...fake.grantedOrigins]).toEqual([]);
+  });
+
+  it('reports a decline as a decline', async () => {
+    const { fake, client } = setup();
+    fake.denyPermissions = true;
+
+    expect(await client.requestStreamAccess(['https://cdn.test/hls/master.m3u8'])).toBe(false);
+    expect([...fake.grantedOrigins]).toEqual([]);
+  });
+
+  it('ignores a URL it cannot parse rather than asking for a broad pattern', async () => {
+    const { fake, client } = setup();
+
+    expect(await client.requestStreamAccess(['not a url.m3u8', ''])).toBe(true);
+    expect([...fake.grantedOrigins]).toEqual([]);
+  });
+});
+
+describe('runtime/popup client — activeTab already covers the page’s own origin', () => {
+  it('does not prompt for a stream served by the tab the popup was opened over', async () => {
+    const { fake, client } = setup();
+    fake.setTabs([{ id: 5, active: true, url: 'https://site.test/watch', windowId: 1 }]);
+    // The popup reads the active tab at load; that is what activates activeTab.
+    await client.getActiveTabId();
+
+    const granted = await client.requestStreamAccess(['https://site.test/hls/master.m3u8']);
+
+    expect(granted).toBe(true);
+    expect([...fake.grantedOrigins]).toEqual([]);
+  });
+
+  it('still asks for a CDN origin the page merely points at', async () => {
+    const { fake, client } = setup();
+    fake.setTabs([{ id: 5, active: true, url: 'https://site.test/watch', windowId: 1 }]);
+    await client.getActiveTabId();
+
+    const granted = await client.requestStreamAccess([
+      'https://site.test/hls/master.m3u8',
+      'https://cdn.test/hls/master.m3u8',
+    ]);
+
+    expect(granted).toBe(true);
+    expect([...fake.grantedOrigins]).toEqual(['https://cdn.test/*']);
+  });
+});

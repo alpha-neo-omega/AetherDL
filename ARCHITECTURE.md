@@ -25,7 +25,7 @@
 | **Document Title** | AetherDL — Architecture |
 | **Document Type** | Technical Architecture Reference (Descriptive) |
 | **Status** | Ratified / Active |
-| **Version** | 1.0.0 |
+| **Version** | 1.1.0 |
 | **Audience** | Software engineers, reviewers, AI implementation agents |
 | **Authority** | Descriptive of [PROJECT_BIBLE.md](PROJECT_BIBLE.md); subordinate to it |
 | **Owner** | Principal Architect (AetherDL) |
@@ -33,7 +33,10 @@
 
 ### Version
 
-`1.0.0`. Versioned independently. Amended only when the Bible's architecture is amended via
+`1.1.0`. Versioned independently. Amended 2026-08-20 alongside Bible 1.1.0
+([ADR-010](docs/adr/010-non-drm-stream-assembly.md)): stream assembly is implemented, so the
+network description below states read requests instead of none. Amended only when the Bible's
+architecture is amended via
 [PROJECT_BIBLE.md §25 Change Control](PROJECT_BIBLE.md#25-change-control--amendment-process).
 
 ### Status
@@ -1335,9 +1338,17 @@ flowchart LR
     style SRV stroke-dasharray: 5 5
 ```
 
-The extension's own code makes zero network calls. The only network activity is (a) user-initiated
-downloads performed by the browser and (b) least-privilege observation of the page's existing media
-requests — neither transmits user data ([PROJECT_BIBLE.md §14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension)).
+The extension **transmits nothing**. Network activity is limited to (a) user-initiated downloads
+performed by the browser, (b) read-only `GET` requests that assemble a non-DRM stream the user asked
+for — manifest and segments, no credentials, on origins granted at point of use — and (c)
+least-privilege observation of the page's existing media requests, which issues no request of its
+own. None of the three carries user data anywhere
+([PROJECT_BIBLE.md §14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension),
+[§10.6](PROJECT_BIBLE.md#106-stream-assembly)).
+
+Structurally: exactly one module may reach the network (`platform/http`), and the release security
+gate fails the build if a network API appears elsewhere or becomes reachable from the popup, the
+settings page or the content script.
 
 ### 18.4 Data Ownership
 
@@ -1568,7 +1579,7 @@ contributors ([PROJECT_BIBLE.md §1.4](PROJECT_BIBLE.md#14-the-static-architectu
 | AC9 | **Fixed detector contract** — new sources are plugins, not core edits. | [§9.2](PROJECT_BIBLE.md#92-detector-interface) |
 | AC10 | **Fixed messaging protocol** — typed, validated, background-brokered. | [§8.5](PROJECT_BIBLE.md#85-communication-rules) |
 | AC11 | **Frozen tech stack** — no framework/library swaps without ADR + approval. | [§15.2](PROJECT_BIBLE.md#152-technology-stack--rationale) |
-| AC12 | **Local-only, zero-egress** — no external calls by extension code. | [§14.3](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension) |
+| AC12 | **Local-only, zero transmission** — extension code sends nothing; its only network calls are read-only `GET`s for stream assembly, through one adapter, on granted origins. | [§14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension) |
 | AC13 | **No DRM-circumvention path** — permanent, non-approvable. | [§6](PROJECT_BIBLE.md#6-unsupported-content) |
 | AC14 | **MV3-only, no remote code** — all logic ships in the package. | [§7.5](PROJECT_BIBLE.md#75-manifest-v3-strategy), [§13.4](PROJECT_BIBLE.md#134-no-remote-code--no-eval--no-inline-scripts) |
 

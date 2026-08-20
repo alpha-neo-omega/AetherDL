@@ -1,28 +1,39 @@
-# AetherDL 1.0.0 — Stable Release Audit
+# AetherDL 1.1.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
-> [privacy audit](PROJECT_BIBLE.md#143-no-external-network-calls-by-the-extension)"), re-executed
-> against the stable `1.0.0` build. Store submission requires Owner-held credentials and is a gated
-> manual step (§18.8); distribution is via official stores only (§18.6, non-goal N17).
+> [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
+> against the `1.1.0` build, which adds non-DRM HLS/DASH downloading. Store submission requires
+> Owner-held credentials and is a gated manual step (§18.8); distribution is via official stores
+> only (§18.6, non-goal N17).
+>
+> **What changed in this audit, and why it matters:** through `1.0.0` this document recorded that the
+> extension made no network call of its own. That is no longer true. Assembling a stream means
+> reading a playlist and its segments, so `1.1.0` performs exactly those GET requests, to the media
+> host, without credentials or cookies. The claim is rewritten below rather than left standing.
+> Nothing is ever **sent**: no analytics, telemetry, beacon, socket or report
+> ([ADR-010](adr/010-non-drm-stream-assembly.md)).
 
 ## 1. Build under audit
 
 | Field | Value |
 |---|---|
-| Version | `1.0.0` — the stable public release (ROADMAP.md:483, :677). Content-identical to the audited `0.9.1` candidate; only the version differs |
+| Version | `1.1.0` — feature release adding non-DRM HLS/DASH downloads and a wider container set, directed by the Project Owner on 2026-08-20 |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
-| Date audited | 2026-08-19 |
+| Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Re-executed at 1.0.0 | yes, after the version bump and repackage: `npm run ci` (exit 0), `npm run security:gate`, `npm run lint:extension`, `npm run test:coverage`, `sha256sum`, `python3 -m zipfile`/`unzip -t` on the 1.0.0 archives. Nothing in this file is carried over from the 0.9.1 run |
+| Executed at 1.1.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 964 unit/integration tests, 68 performance assertions, both builds, manifest validation, the security gate, packaging, and 49 browser e2e cases — **exit 0**. Nothing in this file is carried over from the 1.0.0 run |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.0.0-chrome.zip` | 112 098 | 16 | `d91cd2a92f62675120d86b8f94e66f98b8a2992ebd881b14ea8aa04f0c13923c` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.0.0-firefox.zip` | 112 170 | 16 | `ec6e61d08fde6715f653d4beb19cc0940e816ffd0c4711e406022aabb9c26675` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.1.0-chrome.zip` | 122 241 | 20 | `ff997305c3acb5d318c2ea95c7b56d52440426b49d6b3015f88511b24a938285` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.1.0-firefox.zip` | 122 307 | 20 | `f52a6ccc89c6e9937ac1c127af0707476accfa7b666a34f6021e64118c130fff` | Firefox Add-ons (AMO) |
+
+Both archives grew by four entries: the assembly document (`offscreen.html`, `offscreen.js`) and the
+two chunks the stream code lives in.
 
 Checksums are written by the packaging script to `dist/release/SHA256SUMS.txt`. Archives are
 deterministic for a given Node (and therefore zlib) version: entries are sorted and stamped with a
@@ -39,11 +50,11 @@ entry against its CRC — before reporting it.
 | Check | chrome | firefox | How |
 |---|---|---|---|
 | permissions unchanged and justified | PASS | PASS | manifest compared against the approved baseline in `build/manifest/targets.ts` |
-| no host permissions | PASS | PASS | no `host_permissions` key; no `://` or `<all_urls>` entry anywhere |
+| no host permission granted at install | PASS | PASS | no `host_permissions` key on either target; the stream pattern appears only under `optional_host_permissions`, and no `://` or `<all_urls>` entry appears in `permissions` or `optional_permissions` |
 | CSP intact | PASS | PASS | `script-src 'self'; object-src 'none'` on both |
 | no remote code | PASS | PASS | source and both bundles scanned for `eval`, `new Function`, `importScripts`, script-element creation, `innerHTML` |
-| no network egress | PASS | PASS | scanned for `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon`, `EventSource`, and embedded remote URLs |
-| URL validation in place | PASS | PASS | `normalizeUrl` still exported from `src/shared/utils/url.ts` |
+| network access confined to stream assembly | PASS | PASS | `XMLHttpRequest`, `WebSocket`, `sendBeacon` and `EventSource` are forbidden everywhere and absent everywhere. `fetch` is permitted in exactly one source file (`src/platform/http/service.ts`) and, in the built output, only in code an assembly surface loads — decided by walking the emitted import graph, so `popup.js`, `settings.js` and `content.js` are proven unable to reach it. Embedded remote URLs still fail the check |
+| URL validation in place | PASS | PASS | `normalizeUrl` still exported from `src/shared/utils/url.ts`; `createHttpClient` still exported and still refusing every scheme but `http(s)` before a request is made |
 | message validation in place | PASS | PASS | `isDetectionReport` still exported from `src/runtime/background/context.ts` |
 | no DRM-circumvention code path | PASS | PASS | scanned for key-system, `setMediaKeys` and decryption APIs; only the refusal path names encryption |
 | no background-only code in a UI surface | PASS | PASS | popup/settings payloads scanned for detector identifiers |
@@ -52,9 +63,26 @@ entry against its CRC — before reporting it.
 
 | | chrome | firefox |
 |---|---|---|
-| At install | `storage`, `downloads`, `activeTab`, `scripting` | `storage`, `downloads`, `activeTab`, `scripting` |
+| At install | `storage`, `downloads`, `activeTab`, `scripting`, `offscreen` | `storage`, `downloads`, `activeTab`, `scripting` |
 | Optional (user-granted, revocable) | `notifications`, `contextMenus` | `notifications` |
-| Host permissions | none | none |
+| Optional host permissions | `*://*/*` | `*://*/*` |
+| Host permissions granted at install | none | none |
+
+`offscreen` is Chromium-only and grants no access to anything: it lets the service worker open an
+extension-owned document that can build the `blob:` URL the Downloads API saves. A Firefox event page
+already has those DOM APIs, so Firefox declares nothing extra (§7.4).
+
+The host pattern is broad because a stream's segments are spread across hosts the manifest only names
+when it is read, so no narrower pattern can be declared in advance. It is **optional**: it is
+requested on the download click, for the specific origins in play, and the tab's own origin is
+skipped entirely because `activeTab` already covers it. Declining cancels that download and nothing
+else. Verified by asking the browser what is actually granted: a freshly installed Firefox reports
+`permissions.getAll().origins === []` (`tests/e2e/firefox.spec.ts`).
+
+The Firefox alternative — declaring the pattern under `host_permissions`, which Mozilla documents as
+optional-by-default in MV3 — was **tried and rejected on measurement**: the installed add-on reported
+the origin already granted. Both targets therefore use `optional_host_permissions`, at the stated
+cost that Firefox 115–127, which lacks that key, cannot download streams at all.
 
 Firefox declares no menus permission at all: Mozilla does not accept `menus` as an optional
 permission, and taking it at install would claim access the user never chose, so the context-menu
@@ -75,34 +103,67 @@ result:
 The full lines, including each case's expected-result text, are printed by
 `npm run test:e2e`.
 
-## 3. Privacy audit (§14.3 — no external network calls by the extension)
+`1.1.0` adds a second refusal boundary, because the extension now reads playlists itself. Encryption
+is refused in three independent places:
+
+1. **Classification** — DRM/EME media is `unsupported` and never enqueued (unchanged from 1.0.0).
+2. **Download validation** — an unsupported item cannot become a job, with or without assembly.
+3. **The parsers** — any `#EXT-X-KEY`/`#EXT-X-SESSION-KEY` whose method is not `NONE`, any
+   `ContentProtection`, `cenc:pssh` or `pssh`, ends parsing **before a single segment is fetched**.
+
+A key URI is never read, followed, returned or logged. Tests assert the negative directly: the whole
+refusal, serialised, contains no key host, no key filename and no `URI` attribute
+(`tests/unit/core/download/stream/hls.test.ts`, `dash.test.ts`). A real Chromium was pointed at an
+encrypted loopback playlist and refused it with `stream-hls-encrypted`, with the browser's download
+count unchanged before and after (`tests/e2e/stream-chromium.spec.ts`). There is no decryption code
+in this project and none may be added (§6, ADR-005).
+
+## 3. Privacy audit (§14.3 — external network calls by the extension)
+
+### The claim, stated exactly
+
+The extension performs **one kind of network request of its own**: `GET`, to read a stream manifest
+and its segments, only for a download the user asked for, only on origins the user granted, with
+`credentials: 'omit'` and `cache: 'no-store'` so no cookie, token or identifier is attached. It
+**sends** nothing, anywhere, ever: no analytics, telemetry, beacon, socket, crash report,
+remote configuration or account traffic exists in the codebase, and no setting could enable any.
+
+Everything else the extension does — reading a page's DOM, saving a progressive file — involves no
+request from the extension at all; a progressive download is performed by the browser's own downloads
+API (§10.8).
 
 ### Static evidence
 
-The security gate's egress scan covers every `.ts`/`.tsx` file under `src/` and every emitted
-bundle in both builds. No `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon` or `EventSource`
-appears anywhere in the extension's own code. Five distinct absolute URLs exist in the shipped
-bundles as **strings only**, never contacted: four W3C namespace identifiers
-(`http://www.w3.org/2000/svg`, `.../1999/xlink`, `.../1998/Math/MathML`,
-`.../XML/1998/namespace`), which the DOM requires when creating namespaced elements, and
-`https://react.dev/errors/`, which React prints inside a thrown message. The security gate
-allow-lists exactly those two prefixes and fails on any other absolute URL.
+The security gate scans every `.ts`/`.tsx` file under `src/` and every emitted bundle in both builds.
+
+| What | Verdict |
+|---|---|
+| `XMLHttpRequest`, `WebSocket`, `sendBeacon`, `EventSource` | absent from source and from both builds; forbidden everywhere, no exception |
+| `fetch` in source | appears in exactly one file, `src/platform/http/service.ts`; the gate fails on it anywhere else |
+| `fetch` in the built output | present only in the chunk the assembly surfaces load. The gate walks the emitted import graph from `background.js` and `offscreen.js`, and separately from `popup.js`, `settings.js` and `content.js`; a UI surface that could reach `fetch` fails the build (asserted, with a deliberately mis-split fixture, in `tests/unit/build/security-gate.test.ts`) |
+| Absolute URLs in the bundles | five, all strings only, never contacted: four W3C namespace identifiers the DOM requires when creating namespaced elements, and `https://react.dev/errors/`, which React prints inside a thrown message. Any other absolute URL fails the check |
+| Scheme handling | the HTTP client refuses anything but `http(s)` before it issues a request, so a `blob:`, `data:`, `file:` or `chrome-extension:` URL cannot be fetched even if one reached it (`tests/unit/platform/http.test.ts`) |
 
 ### Runtime evidence, on the packaged artifact
 
-`tests/e2e/release-chromium.spec.ts` extracts `aetherdl-1.0.0-chrome.zip`, installs it in a real
-Chromium, opens the popup and the settings page, runs a real download and reads history, while
-recording every request the browser context makes. Result: **zero requests to any host.** The media
-transfer the user asked for is performed by the browser's own downloads API — which is why it
-appears in `chrome.downloads.search()` and not as a request from any extension page (§10.8).
+`tests/e2e/release-chromium.spec.ts` extracts `aetherdl-1.1.0-chrome.zip`, installs it in a real
+Chromium, opens the popup and the settings page, runs a real progressive download and reads history,
+while recording every request the browser context makes. Result: **no request to any host other than
+the one the user's download went to.**
+
+`tests/e2e/stream-chromium.spec.ts` then does the thing this release adds, in the same real browser:
+a loopback HLS playlist is detected, assembled, and saved. The observed traffic is the manifest, the
+media playlist and the three segments — nothing else — and the saved file is exactly the three
+segments joined (12 288 bytes), delivered to the Downloads API as a `blob:` URL rather than fetched
+again.
 
 The Gecko suite (`tests/e2e/firefox.spec.ts`) makes the same observation for the shipped Firefox
 bundles: no remote resource is loaded — no remote script, font, stylesheet or image.
 
-One limit of that observation: the recorder is attached after the extension is installed and its
-service worker has started, so a request issued during background start-up would not appear in it.
-That window is covered instead by the static scan above, which finds no network API in the source
-at all, and by the CSP, which permits no remote script.
+One limit of that observation, unchanged from 1.0.0: the recorder is attached after the extension is
+installed and its worker has started, so a request issued during background start-up would not appear
+in it. That window is covered by the static evidence above and by the CSP, which permits no remote
+script.
 
 ### What is stored, and where
 
@@ -147,7 +208,7 @@ literal value is absent from the governance documents and was ratified by the Pr
 | `web-ext lint` on the **extracted** Firefox artifact | **0 errors**; `MISSING_DATA_COLLECTION_PERMISSIONS` no longer reported |
 | Independent ZIP reader (Python `zipfile`, `unzip` as fallback) on both artifacts | accepted; `testzip()` reports no corrupt entry, `manifest.json` present |
 | Extracted Chromium artifact installed in real Chromium | installs, service worker starts, popup renders, answers on the message contract |
-| Extracted Firefox artifact installed in real Firefox | installs, popup renders, optional permissions are `["notifications"]` only |
+| Extracted Firefox artifact installed in real Firefox | installs, popup renders, optional permissions are `["notifications"]` only, and `permissions.getAll().origins` is empty — no host access granted at install |
 
 ### Remaining lint warnings, and why they stand
 
@@ -160,19 +221,37 @@ literal value is absent from the governance documents and was ratified by the Pr
 ### Bundle budgets (§12.1), measured on this build
 
 ```
-background   23.3kB gz / 150.0kB budget (3 files,  74.4kB raw)
-content       2.9kB gz /  40.0kB budget (1 file,    7.5kB raw)
-popup        76.3kB gz / 200.0kB budget (5 files, 245.4kB raw)
-settings     76.1kB gz / 200.0kB budget (4 files, 248.9kB raw)
+background   31.2kB gz / 150.0kB budget (5 files,  95.6kB raw)
+content       3.0kB gz /  40.0kB budget (1 file,    7.6kB raw)
+popup        78.0kB gz / 200.0kB budget (6 files, 249.5kB raw)
+settings     78.6kB gz / 200.0kB budget (5 files, 255.4kB raw)
+offscreen    10.1kB gz /  40.0kB budget (3 files,  27.2kB raw)
 ```
+
+The background surface carries the stream code (parsers, assembly, HTTP client) and grew from
+23.3 kB to 31.2 kB gzipped — still a fifth of its budget. §12.1 does not name the assembly document,
+which is new in this release; it holds no UI and no React, so it is held to the content script's
+40 kB rather than a UI budget (ADR-010). No budget was relaxed.
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on the stable build: typecheck, ESLint (zero warnings), Prettier, 835 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 964 unit +
 integration + accessibility + regression tests, 68 performance tests, both builds, both manifest
-validations, the security gate, packaging, and 44 browser e2e tests (Chromium and Firefox, including
+validations, the security gate, packaging, and 49 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 98.74 % statements, 96.27 % branches.
+`npm run test:coverage` (which `ci` does not run): 97.63 % statements, 94.21 % branches.
+
+The 129 tests added for this release cover: the HLS parser including every encryption form and the
+assertion that no key material appears in a refusal (16); the DASH parser including
+`ContentProtection`, `cenc:pssh` and bare `pssh` refusals (14); assembly, its ceilings, its abort
+behaviour and its origin reporting (17); local delivery (5); the object-URL adapter (4); the
+Chromium offscreen client, including a document that never starts listening (11); the offscreen
+assembly host (7); stream jobs inside the download manager — assembly, filename container, byte
+total, progress while preparing, release on completion, cancel mid-assembly, refusal handling,
+and refusal without assembly (11); delivery resolution per engine (5); the security gate's own
+egress and host-permission policy (8); the popup's point-of-use permission request (3 + 6); the
+HTTP client (18, from earlier in this release); and 4 browser e2e cases including a real HLS
+download and a real encrypted-playlist refusal.
 
 Live settings-to-disk evidence on the stable build: with `{host}-{title}.{ext}` and the subfolder
 `AetherDL/Clips` configured, the real Firefox wrote
@@ -191,18 +270,35 @@ Honest limits of this audit:
   file or environment variable exists in this repository.
 - **Icons are placeholders.** `build/scripts/gen-icons.ts` generates solid-colour placeholders; the
   128×128 file is 360 bytes. A listing needs the real icon set (see `docs/STORE_LISTING.md` §7).
-- **Two capabilities the Bible specifies are not implemented,** and this release must not be
-  described as having them: non-DRM HLS/DASH streams are detected but cannot be downloaded (stream
-  assembly, §10.6, is unimplemented and `src/core/download/validate.ts` refuses `hls`/`dash`), and
-  network-request observation does not exist (`src/platform/network` is contract-only). Both are
-  recorded under "Known limitations" in `CHANGELOG.md` and in `docs/STORE_LISTING.md`. They are
-  Phase 4/5 scope, not Phase 10, and they are the Owner's call before any 1.0 claim.
+- **Stream assembly has not been tried against a live streaming site.** Its browser evidence is the
+  loopback HLS fixture in `tests/e2e/stream-chromium.spec.ts`. Real sites vary in ways a fixture
+  cannot reproduce: signed segment URLs that expire, redirect chains, per-request tokens, CORS
+  configurations, and playlists delivered only through a player script (which DOM-based detection
+  will not see at all). No DASH end-to-end browser case exists either; the DASH parser and assembly
+  are covered by unit tests only.
+- **Firefox 115–127 cannot download streams,** and this was not worked around by taking host access
+  at install. Progressive downloads are unaffected. Not measured on those specific versions: the
+  Firefox e2e runs the installed browser's version only.
+- **Network-request observation still does not exist** (`src/platform/network` is contract-only), so
+  detection reads the DOM and no file size is shown before a download starts.
+- **PROJECT_BIBLE.md §14.3 was amended, not left in conflict.** The Owner approved the amendment on
+  2026-08-20; the Bible is now version 1.1.0 and §14.3 states the permitted network activity
+  exhaustively, with the no-transmission guarantee permanent under §25.3. AGENT_RULES.md,
+  ARCHITECTURE.md and ROADMAP.md were brought into line. ADR-010 records the decision.
 - **Human-only test cases** remain as recorded in `docs/MANUAL_TEST_MATRIX.md` §5: screen reader,
-  notification and toolbar UI, private-window behaviour, a non-DRM streaming fixture, and the Edge,
-  Brave, Opera and Vivaldi browsers, which are not installed in this environment.
-- **No release tag exists.** The working tree is not a git repository
-  (`git status` → `fatal: not a git repository`), so tagging could not be performed here.
-## 7. Owner release declaration — 2026-08-20
+  notification and toolbar UI, private-window behaviour, and the Edge, Brave, Opera and Vivaldi
+  browsers, which are not installed in this environment. The streaming case is no longer entirely
+  human-only — an automated HLS download now runs in Chromium — but a live-site check remains
+  unexecuted.
+- **No `1.1.0` tag, commit or GitHub release was created by this work.** The repository exists and
+  carries the annotated `v1.0.0` tag from the earlier Owner action; nothing was committed, tagged,
+  pushed or published for `1.1.0`. Those are Owner actions.
+## 7. Owner release declaration — 1.0.0, 2026-08-20
+
+> Superseded in part by the Owner's 2026-08-20 direction to implement the wider format set,
+> including M3U8 and MPD, over the frozen 1.0.0 scope. The HLS/DASH row below no longer describes
+> the code: `1.1.0` implements non-DRM stream downloading (ADR-010). Every other row still stands.
+> The declaration is kept verbatim as the record of what was decided at 1.0.0.
 
 The Project Owner declares **AetherDL 1.0.0 the stable release**, subject to the limitations in §6
 and to the dated exception recorded in `docs/MANUAL_TEST_MATRIX.md` §5. Recorded decisions:

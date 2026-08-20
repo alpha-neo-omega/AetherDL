@@ -35,8 +35,8 @@ function baseConfig(ctx: BuildContext): InlineConfig {
 }
 
 /**
- * The module surfaces: the background worker/event page and the two extension
- * pages. They load as ES modules, so Rollup may hoist what they share into chunks —
+ * The module surfaces: the background worker/event page, the two extension pages,
+ * and the offscreen assembly document. They load as ES modules, so Rollup may hoist what they share into chunks —
  * which is how React is downloaded and parsed once for both pages rather than twice
  * (§12.1 popup bundle budget).
  */
@@ -53,6 +53,10 @@ export function createViteConfig(ctx: BuildContext): InlineConfig {
           background: resolve(runtime, 'background', 'index.ts'),
           popup: resolve(runtime, 'popup', 'index.ts'),
           settings: resolve(runtime, 'settings', 'index.ts'),
+          // Emitted for both targets so the source tree stays identical (§7.2).
+          // Only Chromium ever loads it: Firefox's event page assembles in place,
+          // because it already has the DOM APIs a service worker lacks (§7.4).
+          offscreen: resolve(runtime, 'offscreen', 'index.ts'),
         },
         output: {
           format: 'es',

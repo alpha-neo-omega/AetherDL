@@ -175,6 +175,8 @@ export interface FakeWebExt {
   failMenus: boolean;
   /** When true, the next notification create rejects. */
   failNotifications: boolean;
+  /** When true, every permission request is declined, as a user can decline. */
+  denyPermissions: boolean;
   setTabs(tabs: readonly WebExtTab[]): void;
   setCurrentWindow(window: WebExtWindow): void;
 }
@@ -347,6 +349,9 @@ export function createFakeWebExt(options: FakeWebExtOptions = {}): FakeWebExt {
         (set.permissions ?? []).every((perm) => grantedPermissions.has(perm)) &&
         (set.origins ?? []).every((origin) => grantedOrigins.has(origin)),
       request: async (set: WebExtPermissionSet) => {
+        if (flags.denyPermissions) {
+          return false;
+        }
         for (const perm of set.permissions ?? []) {
           grantedPermissions.add(perm);
         }
@@ -376,7 +381,7 @@ export function createFakeWebExt(options: FakeWebExtOptions = {}): FakeWebExt {
   const notifications = new Map<string, WebExtNotificationOptions>();
   const onNotificationClicked = new FakeEvent<(notificationId: string) => void>();
   const onCommand = new FakeEvent<(command: string) => void>();
-  const flags = { failMenus: false, failNotifications: false };
+  const flags = { failMenus: false, failNotifications: false, denyPermissions: false };
 
   const menusNamespace = {
     create(properties: WebExtMenuCreateProperties, callback?: () => void): void {
@@ -464,6 +469,12 @@ export function createFakeWebExt(options: FakeWebExtOptions = {}): FakeWebExt {
     },
     get failNotifications(): boolean {
       return flags.failNotifications;
+    },
+    get denyPermissions(): boolean {
+      return flags.denyPermissions;
+    },
+    set denyPermissions(value: boolean) {
+      flags.denyPermissions = value;
     },
     set failNotifications(value: boolean) {
       flags.failNotifications = value;

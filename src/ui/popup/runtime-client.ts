@@ -31,6 +31,14 @@ export interface PopupRuntimeClient {
   queryQueue(): Promise<readonly DownloadTask[]>;
   /** `download/enqueue` — by identity key; the background resolves the items (§8.6). */
   enqueue(itemIds: readonly string[]): Promise<void>;
+  /**
+   * Ask for access to the hosts a stream download will read, at the moment the user
+   * asks for it (§13.7, §4.15). Resolves `true` when nothing needs asking (no stream
+   * among the URLs) or the user granted it; `false` when the user declined.
+   * MUST be called first in the click handler: a browser only accepts a permission
+   * request from a live user gesture.
+   */
+  requestStreamAccess(urls: readonly string[]): Promise<boolean>;
   cancel(taskId: string): Promise<void>;
   retry(taskId: string): Promise<void>;
   pause(taskId: string): Promise<void>;

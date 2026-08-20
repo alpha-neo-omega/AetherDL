@@ -280,6 +280,36 @@ export interface DownloadEventBroadcast {
   readonly error?: AppError;
 }
 
+// ---------------------------------------------------------------------------
+// Stream assembly (PROJECT_BIBLE.md §10.6)
+// ---------------------------------------------------------------------------
+
+export interface StreamAssembleRequest {
+  readonly manifestUrl: string;
+  /** Optional ceiling; the assembler's own limit applies when omitted. */
+  readonly maxTotalBytes?: number;
+}
+
+/** What the assembly host answers with. Encrypted manifests never get this far. */
+export interface StreamAssembleResult {
+  readonly url: string;
+  readonly byteLength: number;
+  /** The container the assembled bytes actually are (`ts` or `mp4`). */
+  readonly extension: string;
+  readonly mimeType: string;
+  readonly segmentCount: number;
+  /** Origins the assembly read from (§13.7 point-of-use host permissions). */
+  readonly origins: readonly string[];
+}
+
+/** Broadcast while an assembly runs, so the queue can show real progress (§10.5). */
+export interface StreamProgressBroadcast {
+  readonly manifestUrl: string;
+  readonly segmentsDone: number;
+  readonly segmentsTotal: number;
+  readonly bytesReceived: number;
+}
+
 /**
  * The typed message contract map. Extended, under change control, as message
  * families are implemented in later phases (§8.5). Phase 3 (reopened) adds the
@@ -329,6 +359,23 @@ export interface MessageMap {
   readonly 'history/clear': MessageExchange<void, void>;
   /** Export history as local JSON; the payload never leaves the device (§4.11). */
   readonly 'history/export': MessageExchange<void, string>;
+  /**
+   * Background → assembly host (Chromium offscreen document): assemble a non-DRM
+   * HLS/DASH manifest and answer with a local URL the Downloads API can save
+   * (§10.6). The bytes never cross this boundary — only the manifest URL going in
+   * and a `blob:` URL coming back — because a runtime message is a poor byte pipe.
+   */
+  readonly 'stream/assemble': MessageExchange<StreamAssembleRequest, StreamAssembleResult>;
+  /**
+   * Readiness probe for the assembly host. Creating an offscreen document resolves
+   * before its module script has run, so the caller polls this until the host
+   * answers rather than sending work into a context with no listener yet.
+   */
+  readonly 'stream/ready': MessageExchange<void, boolean>;
+  /** Cancel an in-flight assembly for a manifest URL (§10.10). */
+  readonly 'stream/abort': MessageExchange<{ readonly manifestUrl: string }, void>;
+  /** Revoke a previously returned assembly URL and drop its bytes (§8.9). */
+  readonly 'stream/release': MessageExchange<{ readonly url: string }, void>;
 }
 
 export type MessageType = keyof MessageMap;

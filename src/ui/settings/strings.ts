@@ -90,7 +90,7 @@ export const SETTINGS_EN_MESSAGES = {
   'about.shortcut': 'Keyboard shortcut',
   'about.shortcutHint': 'Opens the AetherDL popup. Rebind it in your browser settings.',
   'about.privacy':
-    'AetherDL works entirely on this device. It has no account, no telemetry and makes no network calls of its own.',
+    'AetherDL has no account, no telemetry and sends nothing anywhere. It reads a playlist and its segments only to download what you asked for, on hosts you granted.',
 
   'history.title': 'Download history',
   'history.searchLabel': 'Search history',
