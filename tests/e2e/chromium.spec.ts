@@ -130,6 +130,16 @@ test.describe('AetherDL in Chromium', () => {
     ];
     expect(seen).toContain(`${site.origin}/media/sample.mp4`);
     expect(seen).toContain(`${site.origin}/media/sample.mp3`);
+
+    // EVERY reported URL is absolute. The fixture writes its media relatively, and a
+    // relative value reaches the background as a path it can only refuse as malformed
+    // — which is how `<source>` elements and media links written relatively were
+    // silently dropped, while `<video src>` survived on the browser's own absolute
+    // `currentSrc` (§8.10, §13.5).
+    const relative = seen.filter((url) => url !== '' && !/^[a-z][a-z0-9+.-]*:/i.test(url));
+    expect(relative, 'every reported URL must be absolute').toEqual([]);
+    // The fixture's media link is one of them, so this proves the link path too.
+    expect(seen).toContain(`${site.origin}/media/sample.mp4`);
     lastReport = report;
 
     await page.close();

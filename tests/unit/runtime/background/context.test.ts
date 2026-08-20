@@ -138,3 +138,50 @@ describe('detection context builder (trust boundary, §13.8)', () => {
     expect(context.observedUrls).toHaveLength(MAX_URLS);
   });
 });
+
+describe('detection context: relative URLs from an untrusted report (§13.8)', () => {
+  it('resolves them against the page, rather than passing paths to validation', () => {
+    // Defence in depth: the content script resolves what it reads, but the payload is
+    // untrusted and an older content script may still be running after an update.
+    const context = buildDetectionContext(
+      {
+        pageUrl: 'https://site.test/shows/watch',
+        domSignals: [
+          { role: 'video', tagName: 'VIDEO', src: '/media/clip.mp4' },
+          { role: 'source', tagName: 'SOURCE', src: 'other.mp4' },
+          { role: 'link', tagName: 'A', href: '/files/song.mp3' },
+        ],
+        observedUrls: ['/media/clip.mp4', 'https://cdn.test/a.mp4'],
+      },
+      1,
+      'dom',
+      0,
+    );
+
+    expect(context.domSignals.map((signal) => signal.src ?? signal.href)).toEqual([
+      'https://site.test/media/clip.mp4',
+      'https://site.test/shows/other.mp4',
+      'https://site.test/files/song.mp3',
+    ]);
+    expect(context.observedUrls).toEqual([
+      'https://site.test/media/clip.mp4',
+      'https://cdn.test/a.mp4',
+    ]);
+  });
+
+  it('leaves values alone when the report carries no page URL', () => {
+    const context = buildDetectionContext(
+      {
+        pageUrl: '',
+        domSignals: [{ role: 'video', tagName: 'VIDEO', src: '/media/clip.mp4' }],
+        observedUrls: ['/media/clip.mp4'],
+      },
+      1,
+      'dom',
+      0,
+    );
+
+    expect(context.domSignals[0]?.src).toBe('/media/clip.mp4');
+    expect(context.observedUrls).toEqual(['/media/clip.mp4']);
+  });
+});

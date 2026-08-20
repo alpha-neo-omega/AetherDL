@@ -10,7 +10,7 @@
  */
 import { MAX_DOM_SIGNALS, MAX_OBSERVED_URLS } from '@shared/constants';
 import type { WireDomSignal } from '@shared/types';
-import { getExtension } from '@shared/utils';
+import { getExtension, isSupportedExtension } from '@shared/utils';
 
 /** Minimal structural view of a DOM element the scanner reads. */
 export interface ElementLike {
@@ -74,14 +74,48 @@ function roleFor(tagName: string): 'video' | 'audio' | 'source' | 'link' | undef
   }
 }
 
+/**
+ * A link is a media link only when it points at a container this project can actually
+ * download. Accepting any extension turned `/about/index.html` into a signal and an
+ * observed URL, filling the scan budget with page links and crowding out real media
+ * (§9.10, §12.4).
+ */
 function isMediaLink(href: string): boolean {
   const ext = getExtension(href);
-  return ext !== undefined;
+  return ext !== undefined && isSupportedExtension(ext);
 }
 
-function mediaSignal(element: MediaElementLike, role: 'video' | 'audio'): WireDomSignal {
-  const currentSrc = element.currentSrc ?? undefined;
-  const src = attr(element, 'src') ?? element.src ?? undefined;
+/**
+ * Resolve a URL read from the DOM against the document it came from.
+ *
+ * `getAttribute('src')` returns the attribute verbatim, so `src="/media/clip.mp4"`
+ * arrived as a path. Nothing downstream resolved it — validation refused it as
+ * malformed — so a page whose media uses relative URLs detected NOTHING. Without a
+ * base the value is returned unchanged, which keeps this function pure and usable on
+ * its own.
+ */
+function absolute(url: string, baseUrl: string | undefined): string {
+  if (baseUrl === undefined || url === '') {
+    return url;
+  }
+  try {
+    return new URL(url, baseUrl).toString();
+  } catch {
+    // Not resolvable (a `data:`-ish or malformed value): pass it through and let the
+    // background's validation reject it with a reason.
+    return url;
+  }
+}
+
+function mediaSignal(
+  element: MediaElementLike,
+  role: 'video' | 'audio',
+  baseUrl: string | undefined,
+): WireDomSignal {
+  const rawCurrentSrc = element.currentSrc ?? undefined;
+  const currentSrc = rawCurrentSrc === undefined ? undefined : absolute(rawCurrentSrc, baseUrl);
+  const rawSrc = attr(element, 'src') ?? element.src ?? undefined;
+  const src = rawSrc === undefined ? undefined : absolute(rawSrc, baseUrl);
   const type = attr(element, 'type');
   const effective = currentSrc ?? src ?? '';
   const isBlob = effective.startsWith('blob:');
@@ -102,10 +136,11 @@ function mediaSignal(element: MediaElementLike, role: 'video' | 'audio'): WireDo
   };
 }
 
-function sourceSignal(element: ElementLike): WireDomSignal {
+function sourceSignal(element: ElementLike, baseUrl: string | undefined): WireDomSignal {
   const parentTag = element.parentElement?.tagName;
   const parentRole = parentTag === undefined ? undefined : roleFor(parentTag);
-  const src = attr(element, 'src');
+  const rawSrc = attr(element, 'src');
+  const src = rawSrc === undefined ? undefined : absolute(rawSrc, baseUrl);
   const type = attr(element, 'type');
   return {
     role: 'source',
@@ -131,7 +166,7 @@ function linkSignal(href: string, element: ElementLike): WireDomSignal {
  * walk at {@link MAX_DOM_SIGNALS}/{@link MAX_OBSERVED_URLS} rather than building a
  * report the background would truncate to the same bound anyway (§13.8).
  */
-export function scanDocument(document: DocumentLike): ScanResult {
+export function scanDocument(document: DocumentLike, baseUrl?: string): ScanResult {
   const domSignals: WireDomSignal[] = [];
   const observedUrls = new Set<string>();
   const isFull = (): boolean =>
@@ -150,7 +185,7 @@ export function scanDocument(document: DocumentLike): ScanResult {
       // Signals are full but URLs are not: keep harvesting URLs only.
       const mediaRole = roleFor(element.tagName);
       if (mediaRole === 'video' || mediaRole === 'audio') {
-        const signal = mediaSignal(element as MediaElementLike, mediaRole);
+        const signal = mediaSignal(element as MediaElementLike, mediaRole, baseUrl);
         if (signal.currentSrc !== undefined) {
           addUrl(signal.currentSrc);
         }
@@ -158,21 +193,21 @@ export function scanDocument(document: DocumentLike): ScanResult {
           addUrl(signal.src);
         }
       } else if (mediaRole === 'source') {
-        const signal = sourceSignal(element);
+        const signal = sourceSignal(element, baseUrl);
         if (signal.src !== undefined) {
           addUrl(signal.src);
         }
       } else if (mediaRole === 'link') {
         const href = attr(element, 'href');
         if (href !== undefined && isMediaLink(href)) {
-          addUrl(href);
+          addUrl(absolute(href, baseUrl));
         }
       }
       continue;
     }
     const role = roleFor(element.tagName);
     if (role === 'video' || role === 'audio') {
-      const signal = mediaSignal(element as MediaElementLike, role);
+      const signal = mediaSignal(element as MediaElementLike, role, baseUrl);
       domSignals.push(signal);
       if (signal.currentSrc !== undefined) {
         addUrl(signal.currentSrc);
@@ -181,7 +216,7 @@ export function scanDocument(document: DocumentLike): ScanResult {
         addUrl(signal.src);
       }
     } else if (role === 'source') {
-      const signal = sourceSignal(element);
+      const signal = sourceSignal(element, baseUrl);
       domSignals.push(signal);
       if (signal.src !== undefined) {
         addUrl(signal.src);
@@ -189,8 +224,9 @@ export function scanDocument(document: DocumentLike): ScanResult {
     } else if (role === 'link') {
       const href = attr(element, 'href');
       if (href !== undefined && isMediaLink(href)) {
-        domSignals.push(linkSignal(href, element));
-        addUrl(href);
+        const resolved = absolute(href, baseUrl);
+        domSignals.push(linkSignal(resolved, element));
+        addUrl(resolved);
       }
     }
   }

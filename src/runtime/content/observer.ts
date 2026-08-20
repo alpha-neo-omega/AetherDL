@@ -50,10 +50,14 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
 
   const scanAndReport = (): void => {
     cancelPending = undefined;
-    const { domSignals, observedUrls } = scanDocument(deps.document);
+    // The page URL is also the base every relative `src`/`href` is resolved against;
+    // without it a page whose media uses relative URLs reported paths the background
+    // could only refuse (§8.10, §13.5).
+    const pageUrl = deps.pageUrl();
+    const { domSignals, observedUrls } = scanDocument(deps.document, pageUrl);
     const title = deps.documentTitle?.();
     const report: DetectionReport = {
-      pageUrl: deps.pageUrl(),
+      pageUrl,
       domSignals,
       observedUrls,
       ...(title !== undefined && title !== '' && { documentTitle: title }),

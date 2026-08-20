@@ -194,3 +194,74 @@ describe('content scanner bounds (§9.10, §13.8)', () => {
     expect(result.observedUrls).toHaveLength(MAX_OBSERVED_URLS);
   });
 });
+
+describe('content scanner: URLs the page wrote relatively (§8.10, §13.5)', () => {
+  const PAGE = 'https://site.test/shows/watch?ep=4';
+
+  it('resolves a relative video src against the page', () => {
+    // Regression: `getAttribute('src')` returns the attribute verbatim, and nothing
+    // downstream resolved it — validation refused it as malformed — so a page whose
+    // media uses relative URLs detected NOTHING.
+    const result = scanDocument(doc([element('VIDEO', { src: '/media/clip.mp4' })]), PAGE);
+
+    expect(result.domSignals[0]?.src).toBe('https://site.test/media/clip.mp4');
+    expect(result.observedUrls).toEqual(['https://site.test/media/clip.mp4']);
+  });
+
+  it('resolves a document-relative source src against the page directory', () => {
+    const result = scanDocument(
+      doc([element('SOURCE', { src: 'other.mp4' }, { parentTag: 'VIDEO' })]),
+      PAGE,
+    );
+
+    expect(result.domSignals[0]?.src).toBe('https://site.test/shows/other.mp4');
+  });
+
+  it('resolves a relative link href', () => {
+    const result = scanDocument(doc([element('A', { href: '../files/song.mp3' })]), PAGE);
+
+    expect(result.domSignals[0]?.href).toBe('https://site.test/files/song.mp3');
+  });
+
+  it('leaves an absolute URL exactly as it was', () => {
+    const result = scanDocument(
+      doc([element('VIDEO', { src: 'https://cdn.other.test/a.mp4?token=1#t=10' })]),
+      PAGE,
+    );
+
+    expect(result.domSignals[0]?.src).toBe('https://cdn.other.test/a.mp4?token=1#t=10');
+  });
+
+  it('passes through a value it cannot resolve, for the background to refuse', () => {
+    const result = scanDocument(doc([element('VIDEO', { src: 'javascript:void 0' })]), PAGE);
+
+    // Not silently dropped and not mangled: refused later, with a reason.
+    expect(result.domSignals[0]?.src).toBe('javascript:void 0');
+  });
+
+  it('still works with no base, so the scanner stays pure', () => {
+    const result = scanDocument(doc([element('VIDEO', { src: '/media/clip.mp4' })]));
+
+    expect(result.domSignals[0]?.src).toBe('/media/clip.mp4');
+  });
+});
+
+describe('content scanner: which links count as media', () => {
+  it('ignores a link that is not to a supported container', () => {
+    // Regression: any extension counted, so page links filled the scan budget and
+    // crowded out real media.
+    const result = scanDocument(
+      doc([
+        element('A', { href: '/about/index.html' }),
+        element('A', { href: '/style.css' }),
+        element('A', { href: '/downloads/song.mp3' }),
+      ]),
+      'https://site.test/',
+    );
+
+    expect(result.domSignals.map((signal) => signal.href)).toEqual([
+      'https://site.test/downloads/song.mp3',
+    ]);
+    expect(result.observedUrls).toEqual(['https://site.test/downloads/song.mp3']);
+  });
+});

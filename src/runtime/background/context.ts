@@ -50,8 +50,25 @@ function role(value: unknown): DomSignalRole | undefined {
   return typeof value === 'string' && ROLES.has(value) ? (value as DomSignalRole) : undefined;
 }
 
+/**
+ * Resolve a URL from an untrusted report against the page it came from. The content
+ * script resolves what it reads, but the payload is untrusted and an older content
+ * script may still be running after an update, so relative values are resolved here
+ * too rather than refused later as malformed (§13.8).
+ */
+function resolveAgainst(url: string | undefined, pageUrl: string): string | undefined {
+  if (url === undefined || pageUrl === '') {
+    return url;
+  }
+  try {
+    return new URL(url, pageUrl).toString();
+  } catch {
+    return url;
+  }
+}
+
 /** Normalize one untrusted wire signal into a core DomSignal, or drop it. */
-function toDomSignal(value: unknown): DomSignal | undefined {
+function toDomSignal(value: unknown, pageUrl: string): DomSignal | undefined {
   // Element-level guard: an array element may be null/primitive (untrusted, §13.8).
   if (typeof value !== 'object' || value === null) {
     return undefined;
@@ -63,9 +80,9 @@ function toDomSignal(value: unknown): DomSignal | undefined {
   }
   const tagName = str(raw.tagName) ?? signalRole.toUpperCase();
   const parentRole = role(raw.parentRole);
-  const src = str(raw.src);
-  const currentSrc = str(raw.currentSrc);
-  const href = str(raw.href);
+  const src = resolveAgainst(str(raw.src), pageUrl);
+  const currentSrc = resolveAgainst(str(raw.currentSrc), pageUrl);
+  const href = resolveAgainst(str(raw.href), pageUrl);
   const type = str(raw.type);
   const width = num(raw.width);
   const height = num(raw.height);
@@ -103,22 +120,24 @@ export function buildDetectionContext(
   // Defensive: tolerate a non-array field even though the boundary guard rejects it.
   const rawSignals = Array.isArray(report.domSignals) ? report.domSignals : [];
   const rawUrls = Array.isArray(report.observedUrls) ? report.observedUrls : [];
+  const pageUrl = str(report.pageUrl) ?? '';
   const domSignals: DomSignal[] = [];
   for (const raw of rawSignals.slice(0, MAX_SIGNALS)) {
-    const signal = toDomSignal(raw);
+    const signal = toDomSignal(raw, pageUrl);
     if (signal !== undefined) {
       domSignals.push(signal);
     }
   }
   const observedUrls = rawUrls
     .filter((url): url is string => typeof url === 'string' && url !== '')
-    .slice(0, MAX_URLS);
+    .slice(0, MAX_URLS)
+    .map((url) => resolveAgainst(url, pageUrl) ?? url);
 
   const title = str(report.documentTitle);
   const frameId = num(report.frameId);
   return {
     tabId,
-    pageUrl: str(report.pageUrl) ?? '',
+    pageUrl,
     domSignals,
     observedUrls,
     source,
