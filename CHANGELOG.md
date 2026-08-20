@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] — The real icon
+
+### Added
+
+- **The extension has an icon.** For five releases it shipped a solid indigo square — a
+  360-byte placeholder that no store would accept and that told a user nothing. The mark
+  is now a rounded indigo tile carrying the download glyph: a white downward arrow over
+  a tray. It is drawn in source (`build/scripts/gen-icons.ts`) rather than imported as a
+  binary, so it stays reviewable in the repository; the geometry is normalized and
+  sampled 4×4 per pixel, so each of the four sizes is rendered rather than scaled from
+  one bitmap. Output is byte-for-byte reproducible (§8.15).
+- `tests/unit/build/icons.test.ts` decodes the PNGs and asserts what the mark IS — a
+  rounded tile, a white glyph, an indigo field, more than one colour, and the committed
+  files matching a fresh render. A regression to a square of paint now fails the build.
+
+### Fixed
+
+- The tray was 1.4 pixels tall at 16px and rendered as a grey smear. Thickened until it
+  reads as a white bar at the smallest size, which is the size that matters most.
+
+### Changed
+
+- README, the store listing and the release audit no longer describe the icons as
+  placeholders or list the icon set as an outstanding Owner action, because it is not one
+  any more. A commissioned identity and promotional tiles remain optional.
+
 ## [1.2.2] — Five-area sweep: the code no pass had touched
 
 The remaining unhunted areas, taken one at a time: the message bus and the event

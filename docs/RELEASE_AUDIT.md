@@ -1,13 +1,19 @@
-# AetherDL 1.2.1 — Release Audit
+# AetherDL 1.2.3 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.2.1` build: the 1.1.0 stream feature set, the thirteen-defect sweep of
-> 1.2.0, and the eight-defect detection-and-storage sweep of 1.2.1. Store submission requires
-> Owner-held credentials and is a gated manual step (§18.8); distribution is via official stores
-> only (§18.6, non-goal N17).
+> against the `1.2.3` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> 1.2.0, eight in 1.2.1, twelve in 1.2.2) and the real icon set in 1.2.3. Store submission
+> requires Owner-held credentials and is a gated manual step (§18.8); distribution is via official
+> stores only (§18.6, non-goal N17).
+>
+> **Correction, recorded rather than quietly fixed:** the `1.2.2` edition of this file shipped with
+> its title and its artifact table still reading `1.2.1`. An editing script asserted its way out
+> before writing, and the follow-up pass updated only the rows it had reached. The checksums in a
+> release audit are the whole point of the document, so a stale table is a real defect in it. Both
+> are corrected here, and the artifact rows below are the `1.2.3` archives.
 >
 > **What changed in this audit, and why it matters:** through `1.0.0` this document recorded that the
 > extension made no network call of its own. That is no longer true. Assembling a stream means
@@ -20,18 +26,18 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.2.2` — the 1.1.0 stream feature set (ADR-010) plus the three defect sweeps recorded in `CHANGELOG.md`. The 1.2.2 sweep covers the five areas no earlier pass had touched: the message bus and event infrastructure, the settings service, the badge/notification/context-menu runtimes, the content script's DOM scanning, and the build tooling |
+| Version | `1.2.3` — the 1.1.0 stream feature set (ADR-010), the three defect sweeps recorded in `CHANGELOG.md`, and the real icon set, which replaced a 360-byte placeholder square no store would have accepted |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.2.2 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1070 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.2.3 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1088 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.2.1-chrome.zip` | 125 316 | 20 | `721dd00ff89999e511db0e7c7115a0dc32f8a0c8372c1d1cf6690d41e7d3aabc` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.2.1-firefox.zip` | 125 383 | 20 | `71df1084d341cdabdb665051dafc2ea0a670a5ff7cf78d7e1e97bf6dce75b509` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.2.3-chrome.zip` | 129 431 | 20 | `b00f574a497b5cce221d58cfbecbf270a46d3a5df93916a53a4edfe7987c1348` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.2.3-firefox.zip` | 129 497 | 20 | `d3941dca3ddf099ab75213a20ef1f8ae4216012ccb31cf7041fd7973e15a3660` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -243,11 +249,15 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1031 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1088 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
 validations, the security gate, packaging, and 50 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
 `npm run test:coverage` (which `ci` does not run): 97.23 % statements, 94.24 % branches.
+
+`1.2.3` added 18 tests over the icon set: the PNGs are decoded and the mark itself is asserted — a
+rounded tile with transparent corners, a white glyph on an indigo field, more than one colour, and
+the committed files matching a fresh render — so it cannot regress to the solid square it replaced.
 
 The `1.2.2` sweep added 39 tests, including one that earns its place by construction: the Chromium
 e2e now asserts that every URL the content script reports is absolute, and that assertion was run
@@ -302,8 +312,11 @@ Honest limits of this audit:
   cannot be run offline; submission needs accounts and credentials only the Project Owner holds, and
   PROJECT_BIBLE.md §18.8 makes it "a gated manual step". No `publish`/`submit` script, credential
   file or environment variable exists in this repository.
-- **Icons are placeholders.** `build/scripts/gen-icons.ts` generates solid-colour placeholders; the
-  128×128 file is 360 bytes. A listing needs the real icon set (see `docs/STORE_LISTING.md` §7).
+- **The icons are an in-house mark, not a commissioned identity.** `build/scripts/gen-icons.ts`
+  renders a rounded indigo tile carrying a white download glyph at each of the four sizes, drawn to
+  stay legible at 16px, and `tests/unit/build/icons.test.ts` decodes the output and asserts what the
+  mark is. They are fit to submit. Whether a designed logotype or promotional tiles are wanted is a
+  separate, optional Owner decision (`docs/STORE_LISTING.md` §7).
 - **Streams whose audio is a separate track are refused, not downloaded.** Most real-world DASH and
   much HLS is packaged that way, so a large share of streams in the wild are out of reach in this
   build. The alternative — saving a video with no sound — was the 1.1.0 behaviour and is worse;

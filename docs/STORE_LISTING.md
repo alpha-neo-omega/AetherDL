@@ -446,10 +446,10 @@ must not be readable as a circumvention tool, because the product is not one (PR
 
 | Asset            | Path                                                                | Status                              |
 | ---------------- | ------------------------------------------------------------------- | ----------------------------------- |
-| Icon 16×16 PNG   | `public/icons/icon-16.png`, copied to `dist/chrome/`, `dist/firefox/` | Exists — **placeholder** |
-| Icon 32×32 PNG   | `public/icons/icon-32.png`, copied to both builds                     | Exists — **placeholder** |
-| Icon 48×48 PNG   | `public/icons/icon-48.png`, copied to both builds                     | Exists — **placeholder** |
-| Icon 128×128 PNG | `public/icons/icon-128.png`, copied to both builds                    | Exists — **placeholder** |
+| Icon 16×16 PNG   | `public/icons/icon-16.png`, copied to `dist/chrome/`, `dist/firefox/` | Exists — the rendered mark |
+| Icon 32×32 PNG   | `public/icons/icon-32.png`, copied to both builds                     | Exists — the rendered mark |
+| Icon 48×48 PNG   | `public/icons/icon-48.png`, copied to both builds                     | Exists — the rendered mark |
+| Icon 128×128 PNG | `public/icons/icon-128.png`, copied to both builds                    | Exists — the rendered mark |
 | Screenshot 1 — popup, 1280×800 | `dist/release/assets/screenshot-1-popup-1280x800.png` | Exists — captured from the real build |
 | Screenshot 2 — settings, 1280×800 | `dist/release/assets/screenshot-2-settings-1280x800.png` | Exists — captured from the real build |
 | Screenshot 3 — settings/history, 1280×800 | `dist/release/assets/screenshot-3-settings-history-1280x800.png` | Exists — captured from the real build |
@@ -473,14 +473,17 @@ All four icon sizes are declared in both manifests, under `icons` and under `act
 (`dist/chrome/manifest.json`, `dist/firefox/manifest.json`), and the set of sizes matches
 `ICON_SIZES = [16, 32, 48, 128]` in `build/scripts/gen-icons.ts:16`.
 
-> [!WARNING]
-> **The icons are placeholders and are not fit for a store listing.**
-> `build/scripts/gen-icons.ts:3-6` states its purpose as generating "placeholder icon assets",
-> that "these are solid brand-color placeholders", and that "the final Material Design 3 icon set
-> is produced in the UI phase (PROJECT_BIBLE.md §11.10)". README.md's script table describes
-> `npm run gen:icons` as "Regenerate placeholder icon assets". The file sizes corroborate it: the
-> 128×128 PNG is 360 bytes. A store listing needs the real icon set at the same four sizes, and
-> the 128×128 icon is the one every Chromium store displays.
+The icons are the real mark, not placeholders: a rounded indigo tile carrying a white download
+glyph — a downward arrow over a tray — rendered at each size rather than scaled from one bitmap
+(`build/scripts/gen-icons.ts`). The geometry is described in source and sampled 4×4 per pixel, so
+the output is reviewable in the repository and reproducible byte-for-byte (§8.15). What the mark IS
+is asserted by `tests/unit/build/icons.test.ts`, which decodes the PNGs and checks the tile, the
+glyph and the field — so it cannot quietly regress to the solid square it replaced.
+
+> [!NOTE]
+> This is an in-house mark, drawn to survive 16px, not a commissioned identity. If the Owner wants
+> a designed logotype, promotional tiles or a distinct brand treatment, that is still an Owner
+> action — but nothing here blocks a store submission any more.
 
 ### 7.2 What does not exist yet
 
@@ -491,7 +494,6 @@ call.
 
 | Asset                       | Expected size            | Store                       | Status                     |
 | --------------------------- | ------------------------ | --------------------------- | -------------------------- |
-| Final icon set (16/32/48/128) | Replace the placeholders | All                         | **Owner action required** |
 | Store logo                  | 300×300 PNG              | Microsoft Edge Add-ons      | **Owner action required** |
 | Small promotional tile      | 440×280 PNG              | Chrome Web Store (optional) | **Owner action required** |
 | Marquee promotional tile    | 1400×560 PNG             | Chrome Web Store (optional) | **Owner action required** |
@@ -554,7 +556,7 @@ required field in at least one store console.
 
 **Assets**
 
-- [ ] Commission or produce the final icon set, replacing the placeholders (§7.1).
+- [ ] Decide whether the in-house mark (§7.1) is the identity to ship, or commission one (optional).
 - [ ] Confirm the screenshot selection. Four images were captured from the real build into
       `dist/release/assets/` by `npm run screenshots` (§7.1); which of them the listing uses, and
       whether more screens are wanted, is unconfirmed.

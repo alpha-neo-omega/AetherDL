@@ -123,7 +123,6 @@ Known limitations at 1.2.2, stated in full in [CHANGELOG.md](CHANGELOG.md):
 - The _Warn about duplicates_ setting is stored but inert: nothing compares detected media against
   download history. The popup does flag media already in the queue.
 - No file size is shown for detected media before a download starts.
-- The extension icons are placeholders.
 - Verified on Chromium and Firefox only. Edge, Brave, Opera and Vivaldi share the Chromium engine
   and the same artifact but were not run; several manual cases (screen reader, notification and
   toolbar UI, private windows) are recorded as NOT EXECUTED in
@@ -177,7 +176,7 @@ Load either directory via the browser's "load unpacked / temporary add-on" devel
 | `npm run lint:extension`                           | Mozilla's add-on linter over the Firefox build.                                                                             |
 | `npm run package`                                  | Validate, then write one deterministic store archive per target.                                                            |
 | `npm run screenshots`                              | Capture store screenshots from the built extension.                                                                         |
-| `npm run gen:icons`                                | Regenerate placeholder icon assets.                                                                                         |
+| `npm run gen:icons`                                | Re-render the icon set from its source geometry.                                                                            |
 | `npm run ci`                                       | Full gate: typecheck, lint, format, tests, performance, builds, manifest validation, security gate, packaging, browser e2e. |
 
 ## Release
