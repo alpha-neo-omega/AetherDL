@@ -24,7 +24,7 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.2.1 — second defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0
+**1.2.2 — third defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0
 stable release: per-tab media
 detection, downloads through the browser's own download manager with a durable queue, retry and
 pause/resume, settings, local history, popup and settings surfaces, and the optional context-menu
@@ -67,6 +67,21 @@ will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 
 ### What the defect sweeps fixed
 
+**1.2.2** took the five areas no earlier pass had touched, one at a time: the message
+bus and event infrastructure, the settings service, the badge/notification/context-menu
+runtimes, the content script's DOM scanning, and the build tooling. Twelve defects. Two
+made features silently not work:
+
+- **Media written with relative URLs was dropped** — `<source src="clip.mp4">` and media
+  links reached the background as paths it could only refuse. `<video src>` survived only
+  because browsers also report an absolute `currentSrc`, which is why no test caught it.
+- **Granting the context-menu permission did nothing until a restart**, because the
+  namespace only appears on grant and the code decided at start-up.
+
+Also: one throwing event subscriber used to stall the download queue; `constructor` and
+`toString` were accepted as settings; a bulk download run announced its tail job by job;
+and a source map left by a development build was packaged into the release archive.
+
 **1.2.1** hunted the detection engine and the storage layer, the two areas with the most
 logic and the least recent scrutiny. Eight defects, all fixed; the one worth knowing about:
 a dead IndexedDB connection was cached forever, so if the browser closed the connection —
@@ -88,7 +103,7 @@ that matter to a user:
   nothing had asked for host access. Every path asks now.
 - **Site access is listed in Settings**, with a Revoke for each granted origin.
 
-Known limitations at 1.2.1, stated in full in [CHANGELOG.md](CHANGELOG.md):
+Known limitations at 1.2.2, stated in full in [CHANGELOG.md](CHANGELOG.md):
 
 - **Streams that keep audio in a separate track cannot be downloaded.** Most real-world
   DASH, and much HLS, is packaged that way. AetherDL refuses rather than saving a silent

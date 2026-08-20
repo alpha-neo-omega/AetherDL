@@ -9,6 +9,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] — Five-area sweep: the code no pass had touched
+
+The remaining unhunted areas, taken one at a time: the message bus and the event
+infrastructure, the settings service, the badge/notification/context-menu runtimes,
+the content script's DOM scanning, and the build and packaging tooling. **Twelve
+defects, all fixed.** Two of them made features silently not work at all.
+
+### Fixed
+
+**Event infrastructure and the message bus**
+
+- **One event subscriber that threw broke the others — and stalled the download
+  queue.** `TypedEventEmitter.emit` did not isolate listeners, so a throwing
+  subscriber skipped every later listener and unwound into whatever emitted the event.
+  In the download manager a throwing `job:completed` subscriber skipped `pump()` and
+  `checkQueueCompletion()`: the queue stopped scheduling and the next job never
+  started, from a bad listener somewhere else entirely. Listeners are now isolated,
+  with the failure reported to the owner (`src/shared/utils/events.ts`).
+- The download manager, the detection engine and the message bus now route subscriber
+  failures onto their own error streams instead of letting them escape.
+- **A second handler for the same message type replaced the first in silence** — a
+  wiring mistake every time, leaving a handler that would never be called again with
+  nothing to show it. A duplicate registration now throws; re-registration after
+  unsubscribe or dispose still works (`src/platform/messaging/service.ts`).
+- The offscreen assembly host did not guard double-start, unlike every other surface.
+
+**Settings**
+
+- **`constructor` and `toString` were accepted as settings.** An untrusted patch key
+  indexed the validator table directly, so names on `Object.prototype` found something
+  truthy: those two were validated by `Object`'s own constructor and merged into the
+  stored catalogue, while `__proto__` and `hasOwnProperty` threw a raw TypeError
+  instead of being reported as unknown. `settings/update` takes its payload straight
+  off the message bus (`src/core/settings/validate.ts`).
+- Two updates that began before the first load resolved read the same base catalogue,
+  and the second write dropped the first one's change. Updates now queue.
+
+**Notifications and the context menu**
+
+- **A bulk run announced its tail job by job.** The check was "is more than one job in
+  flight right now", but a batch drains — so the last jobs each produced a toast on top
+  of the summary. A three-job batch announced twice and then summarised. The run is now
+  remembered; a lone download is announced once and no longer also summarised.
+- **Granting the context-menu permission did nothing until a restart.** On Chromium the
+  menu namespace does not exist until the permission is granted, and both the platform
+  adapter and the runtime decided at start-up: enable the setting, grant the
+  permission, and there were no entries and no clicks for the rest of the session. The
+  adapter now resolves the namespace per call and reports `available()` honestly; the
+  runtime attaches its click listener the first time the feature is available. Firefox,
+  which cannot offer the permission at all, is unchanged.
+- Context-menu syncs could overlap, so one run removed an entry another had just decided
+  to keep — churn, flicker and spurious "duplicate id" errors. They now run one at a
+  time.
+
+**Content script**
+
+- **Media written with relative URLs was dropped.** `getAttribute('src')` returns the
+  attribute as written and took precedence over the element's own absolute property, so
+  `<source src="other.mp4">` and `<a href="/files/song.mp3">` reached the background as
+  paths, which validation refused as malformed. `<video src="/rel.mp4">` survived only
+  because the browser also reports an absolute `currentSrc` — which is why no test
+  caught it. The scanner now resolves what it reads against the page, and the
+  background resolves relative values too, since the report is untrusted and an older
+  content script may still be running after an update.
+- **Any link with any extension counted as media**, so `/about/index.html` and
+  `/style.css` became signals and observed URLs, filling the 500-signal scan budget and
+  crowding out real media. A link counts only when its extension is a container this
+  project can download.
+
+**Build and packaging**
+
+- **A source map left by a development build was packaged into the release archive.**
+  `background.js.map` names every source file. The release path now refuses anything
+  outside an allowlist of file kinds an extension may contain — source maps, dotfiles
+  and stray notes included — naming the offending path.
+- A symbolic link in the build output was followed and its target's contents packaged,
+  including files from outside the build directory. Refused now.
+- The ZIP entry count and archive size are written into 16- and 32-bit fields with no
+  guard; both are now checked, so an impossible-but-catastrophic silent truncation
+  fails the build instead of reaching a store reviewer.
+
+### Known limitations
+
+- Unchanged from 1.2.1.
+
 ## [1.2.1] — Detection and storage sweep
 
 A hunt through the two layers that had seen the least recent scrutiny: the detection

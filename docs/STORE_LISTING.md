@@ -15,13 +15,13 @@ human can paste them into each store console when publication happens.
 | Deliverable               | "store listings/assets", required by Phase 10 (PROJECT_BIBLE.md §22.11, line 2731; ROADMAP.md Phase 10 — Release Preparation, line 381)                                                   |
 | Phase                     | Phase 11 — Stable Release. Its included scope is "Store submission/publication via official channels only" (ROADMAP.md:398); Phase 10 prepared this copy                                   |
 | Publication phase         | Phase 11 — Stable Release, whose included scope is "Store submission/publication via official channels only" (ROADMAP.md:398)                                                             |
-| Version to submit         | `1.2.1` — the 1.1.0 feature set (ADR-010) plus two fix sweeps: thirteen defects in 1.2.0 and eight in 1.2.1 (detection engine and storage layer)                                          |
+| Version to submit         | `1.2.2` — the 1.1.0 feature set (ADR-010) plus three fix sweeps: thirteen defects in 1.2.0, eight in 1.2.1, twelve in 1.2.2                                                              |
 | Distribution channel      | Official extension stores only. Any other update channel is a permanent non-goal (PROJECT_BIBLE.md §3.1 item N17, line 286 onward)                                                        |
 | Listing language          | English (`en`) only — the sole catalogue in the repository is `public/_locales/en/messages.json`, and `en` is the declared default and fallback locale (PROJECT_BIBLE.md §19.2)            |
 
 Two preconditions apply before this copy is used:
 
-1. **Cleared.** The artifacts under `dist/` are built at version `1.2.1`
+1. **Cleared.** The artifacts under `dist/` are built at version `1.2.2`
    (`dist/chrome/manifest.json`, `dist/firefox/manifest.json`, matching `package.json`), and the
    packaged archives in `dist/release/` carry the same version. Versions are synchronized across
    all target builds from one source (PROJECT_BIBLE.md §7.6; ROADMAP.md §7).
@@ -545,8 +545,8 @@ required field in at least one store console.
 - [ ] Approve the short summary and full description in §3, after checking them against the
       release build (see §1, precondition 2).
 - [ ] Approve the category choice per store (§3.4).
-- [ ] Confirm `1.2.1` is the version to submit. The artifacts on disk and the packaged archives all
-      read `1.2.1` (§1, precondition 1).
+- [ ] Confirm `1.2.2` is the version to submit. The artifacts on disk and the packaged archives all
+      read `1.2.2` (§1, precondition 1).
 - [ ] Read §4.3 before answering any store question about site access: the listing must say that no
       host permission is granted at install and that access is requested per-origin when the user
       downloads a stream — and, for AMO, that Firefox 115–127 cannot download streams at all.

@@ -20,11 +20,11 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.2.1` — the 1.1.0 stream feature set (ADR-010) plus the two defect sweeps recorded in `CHANGELOG.md`. The 1.2.1 sweep covers the detection engine and the storage layer: a dead IndexedDB connection that silently stopped all persistence, unbounded history, unbounded per-tab state, and write amplification in the queue |
+| Version | `1.2.2` — the 1.1.0 stream feature set (ADR-010) plus the three defect sweeps recorded in `CHANGELOG.md`. The 1.2.2 sweep covers the five areas no earlier pass had touched: the message bus and event infrastructure, the settings service, the badge/notification/context-menu runtimes, the content script's DOM scanning, and the build tooling |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.2.1 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1031 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.2.2 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1070 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 
 ### Artifacts
 
@@ -247,7 +247,11 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
 validations, the security gate, packaging, and 50 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 97.64 % statements, 94.28 % branches.
+`npm run test:coverage` (which `ci` does not run): 97.23 % statements, 94.24 % branches.
+
+The `1.2.2` sweep added 39 tests, including one that earns its place by construction: the Chromium
+e2e now asserts that every URL the content script reports is absolute, and that assertion was run
+against the pre-fix scanner to confirm it fails there.
 
 The `1.2.1` sweep added 18 tests over the detection engine and the storage layer, including a
 connection that dies underneath the adapter (proving it reconnects rather than failing silently for
