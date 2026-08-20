@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { UNTITLED_MEDIA_TITLE } from '@shared/constants';
 import { clamp01, createScorer } from '@core/detection/scoring/scoring';
 import type { MediaItem } from '@shared/types';
 
@@ -70,5 +71,21 @@ describe('detection scoring', () => {
 
   it('clamps a pathologically negative signal to 0', () => {
     expect(scorer.score(item({ detectedBy: 'blob-media', width: 1, height: -1_000_000 }))).toBe(0);
+  });
+});
+
+describe('scoring: the title term must actually distinguish (§9.7)', () => {
+  it('rewards a real title and not the placeholder every unnamed item carries', () => {
+    // Regression: `title` is a required field, so rewarding its mere presence added
+    // the same constant to every score and ranked nothing.
+    const scorer = createScorer();
+    const base = item({ detectedBy: 'html5-video' });
+
+    const named = scorer.score({ ...base, title: 'Episode 4 — The Reveal' });
+    const unnamed = scorer.score({ ...base, title: UNTITLED_MEDIA_TITLE });
+    const empty = scorer.score({ ...base, title: '' });
+
+    expect(named).toBeGreaterThan(unnamed);
+    expect(empty).toBe(unnamed);
   });
 });

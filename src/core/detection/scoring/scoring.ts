@@ -5,6 +5,7 @@
  * Restrictions: Domain layer — pure.
  * Public API: createScorer.
  */
+import { UNTITLED_MEDIA_TITLE } from '@shared/constants';
 import type { MediaItem } from '@shared/types';
 import type { Scorer } from '@core/detection/scoring';
 
@@ -46,7 +47,10 @@ export function createScorer(): Scorer {
       if (item.sizeBytes !== undefined) {
         score += 0.05;
       }
-      if (item.title !== undefined) {
+      // A REAL title, not the placeholder every unnamed item carries. `title` is a
+      // required field, so rewarding its mere presence added the same constant to
+      // every score and ranked nothing (§9.7).
+      if (item.title !== '' && item.title !== UNTITLED_MEDIA_TITLE) {
         score += 0.05;
       }
       // Resolution prominence: larger media is more likely the primary content.

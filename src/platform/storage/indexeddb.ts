@@ -51,6 +51,8 @@ export function createIndexedDbObjectStore<T>(
   const version = options.version ?? 1;
   let database: IDBDatabase | undefined;
   let opening: Promise<IDBDatabase> | undefined;
+  /** Set only when a cached handle turned out to be dead; see `withReconnect`. */
+  let connectionLost = false;
 
   const resolveFactory = (): IDBFactory | undefined =>
     options.factory ?? (globalThis as { indexedDB?: IDBFactory }).indexedDB;
@@ -113,10 +115,24 @@ export function createIndexedDbObjectStore<T>(
     // the next operation reconnect (§20.7).
     ready.onversionchange = (): void => {
       ready.close();
-      database = undefined;
-      opening = undefined;
+      forget(ready);
+    };
+    // A connection can also die WITHOUT a version change — the profile's storage is
+    // cleared, the database is deleted, the browser forces it shut. Keeping the dead
+    // handle cached made every later read and write fail for the rest of the session,
+    // so the queue silently stopped persisting (§20.7).
+    ready.onclose = (): void => {
+      forget(ready);
     };
     return ready;
+  };
+
+  /** Drop a handle we must not use again, so the next call reconnects. */
+  const forget = (dead?: IDBDatabase): void => {
+    if (dead === undefined || database === dead) {
+      database = undefined;
+      opening = undefined;
+    }
   };
 
   /** Open once and reuse; a failed open is not cached so a later call can retry. */
@@ -134,7 +150,7 @@ export function createIndexedDbObjectStore<T>(
     }
   };
 
-  const read = async <R>(
+  const readOnce = async <R>(
     operation: string,
     body: (store: IDBObjectStore) => IDBRequest<R>,
   ): Promise<R> => {
@@ -143,19 +159,61 @@ export function createIndexedDbObjectStore<T>(
     try {
       transaction = connection.transaction(storeName, 'readonly');
     } catch (cause) {
+      // The handle is unusable; drop it so the retry opens a fresh one.
+      forget(connection);
+      connectionLost = true;
       throw fail(operation, cause);
     }
-    return fromRequest(body(transaction.objectStore(storeName)), operation);
+    return new Promise<R>((resolve, reject) => {
+      // A transaction can abort on its own (storage eviction, a forced close). Without
+      // this the promise would depend entirely on the request firing, so a settled
+      // outcome is guaranteed here rather than assumed.
+      transaction.onabort = (): void => {
+        reject(fail(operation, transaction.error));
+      };
+      transaction.onerror = (): void => {
+        reject(fail(operation, transaction.error));
+      };
+      fromRequest(body(transaction.objectStore(storeName)), operation).then(resolve, reject);
+    });
   };
 
+  /**
+   * Run an operation, and if it failed because the cached CONNECTION was dead, run it
+   * once more against a fresh one. Only that case is retried: an open that failed, a
+   * request that errored, or a transaction that aborted is a real failure and must
+   * surface as one rather than be tried again behind the caller's back. One retry,
+   * never a loop.
+   */
+  const withReconnect = async <R>(attempt: () => Promise<R>): Promise<R> => {
+    connectionLost = false;
+    try {
+      return await attempt();
+    } catch (cause) {
+      if (!connectionLost) {
+        throw cause;
+      }
+      connectionLost = false;
+      return attempt();
+    }
+  };
+
+  const read = <R>(operation: string, body: (store: IDBObjectStore) => IDBRequest<R>): Promise<R> =>
+    withReconnect(() => readOnce(operation, body));
+
   /** Run a write and resolve only once its transaction commits (durability, §20.7). */
-  const write = async (operation: string, body: (store: IDBObjectStore) => void): Promise<void> => {
+  const writeOnce = async (
+    operation: string,
+    body: (store: IDBObjectStore) => void,
+  ): Promise<void> => {
     const connection = await connect();
     return new Promise<void>((resolve, reject) => {
       let transaction: IDBTransaction;
       try {
         transaction = connection.transaction(storeName, 'readwrite');
       } catch (cause) {
+        forget(connection);
+        connectionLost = true;
         reject(fail(operation, cause));
         return;
       }
@@ -175,6 +233,9 @@ export function createIndexedDbObjectStore<T>(
       }
     });
   };
+
+  const write = (operation: string, body: (store: IDBObjectStore) => void): Promise<void> =>
+    withReconnect(() => writeOnce(operation, body));
 
   return {
     put(id: string, value: T): Promise<void> {

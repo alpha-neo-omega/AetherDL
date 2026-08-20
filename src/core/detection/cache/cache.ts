@@ -57,6 +57,14 @@ export function createDetectionCache(options: DetectionCacheOptions): DetectionC
 
     set(tabId: number, items: readonly MediaItem[], pageUrl?: string): void {
       entries.delete(tabId);
+      // Drop what has already expired before deciding what to evict. Otherwise a
+      // stale entry keeps a slot and a LIVE one is evicted in its place, since
+      // expiry is only noticed when an entry is read (§9.9, §12.5).
+      for (const [id, entry] of [...entries.entries()]) {
+        if (isExpired(entry)) {
+          entries.delete(id);
+        }
+      }
       entries.set(tabId, { items, pageUrl, storedAt: clock() });
       while (entries.size > maxTabs) {
         const oldest = entries.keys().next().value;

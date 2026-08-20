@@ -92,3 +92,11 @@ export const MAX_DOM_SIGNALS = 500;
 
 /** Upper bound on the observed URLs one observation may carry (§9.10, §13.8). */
 export const MAX_OBSERVED_URLS = 500;
+
+/**
+ * The title an item carries when nothing named it — no candidate title, no filename,
+ * no document title. Shared because the scorer must be able to tell a real title from
+ * this placeholder: it used to reward "has a title", which every item satisfies, so
+ * the term added the same constant to every score and distinguished nothing (§9.7).
+ */
+export const UNTITLED_MEDIA_TITLE = 'Untitled media';

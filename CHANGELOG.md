@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] — Detection and storage sweep
+
+A hunt through the two layers that had seen the least recent scrutiny: the detection
+engine and the storage layer. Eight defects, all fixed. One could stop the extension
+saving anything for the rest of a session; three were unbounded growth; two were
+controls and signals that looked meaningful and were not.
+
+### Fixed
+
+- **A dead IndexedDB connection was cached forever, so the extension silently stopped
+  persisting.** A connection can close without a version change — the profile's
+  storage is cleared, the database is deleted, the browser forces it shut — and the
+  adapter kept using the dead handle: every later read and write failed for the rest
+  of the session, so the download queue stopped being saved and history stopped being
+  recorded. The handle is now dropped on `close`, and an operation that finds a dead
+  connection reconnects and runs once more. Only that case retries: a real failure
+  still surfaces as one (`src/platform/storage/indexeddb.ts`).
+- **A read whose transaction aborted was not guaranteed to settle.** A transaction can
+  abort on its own (storage eviction, a forced close); the read now rejects on that,
+  rather than depending on a request event that may not come. A hung read would have
+  hung queue hydration, and with it every download message handler.
+- **Every queue save rewrote every job.** `save` runs on each queue mutation, so a
+  single progress patch wrote one record per job in the queue — a hundred writes to
+  move one number. Saves now diff against what was last written and touch only what
+  changed; an unchanged queue writes nothing at all
+  (`src/core/storage/queue-repository.ts`).
+- **History grew without bound.** "Keep forever" was read as "keep everything", so the
+  store grew with every download for the life of the profile and every listing had to
+  read all of it. There is now a ceiling of 5 000 records, oldest dropped first,
+  applied whatever the retention setting says (`src/core/history/history.ts`).
+- **Recording a download read the whole history store** — 51 full reads for 50
+  downloads, each serialising every record. The sweep is now throttled to once a
+  minute (and runs immediately when the ceiling may have been passed). Listing always
+  applies the retention window, so nothing past its retention is ever shown.
+- **Per-tab detection state was unbounded.** Each tracked tab held its last report — up
+  to 500 DOM signals and 500 observed URLs — plus the items built from it, and entries
+  were dropped only when the tab closed. Tracking is now bounded to 50 tabs, evicting
+  the least-recently-updated; the active tab and any tab with work in flight are never
+  evicted, and an evicted tab simply detects again (`src/runtime/background/state.ts`).
+- **An expired cache entry could cost a live one its slot.** Expiry was noticed only
+  when an entry was read, so a stale entry held a slot while a fresh tab evicted a live
+  neighbour. Expired entries are now reclaimed first (`src/core/detection/cache/cache.ts`).
+- **The scorer's title signal ranked nothing.** `title` is a required field — every item
+  has one, falling back to a placeholder — so rewarding its presence added the same
+  constant to every score. It now rewards a real title only
+  (`src/core/detection/scoring/scoring.ts`, `src/shared/constants/index.ts`).
+- **The popup offered a Kind filter that could never match.** No detector produces
+  `image-sequence` media, so choosing it always showed "No matches". The option is gone;
+  the kind stays in the model for when a detector produces one (`src/ui/popup/app.tsx`).
+
+### Changed
+
+- History keeps at most 5 000 records. Nothing else about retention changed: the window
+  the user chose still decides what is kept and what is shown.
+
+### Known limitations
+
+- Unchanged from 1.2.0. The hunt covered the detection engine and the storage layer;
+  the areas it did not cover are named in `docs/RELEASE_AUDIT.md` §6.
+
 ## [1.2.0] — Defect sweep: silent failures made loud
 
 A hunt through the 1.1.0 UI and background code turned up thirteen defects; all thirteen

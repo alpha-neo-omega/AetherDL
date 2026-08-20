@@ -76,18 +76,32 @@ describe('cache bounds: detection cache', () => {
 
   it('sweeps every expired entry on cleanup', () => {
     const { cache, now } = setup();
-    // One under the bound, so the fresh entry below evicts nothing and the sweep
-    // is measured on age alone.
+    // One under the bound, so nothing is evicted for size and the sweep is measured
+    // on age alone. No `set` after the clock moves: writing also reclaims expired
+    // entries, which is what stops a stale entry costing a live one its slot.
     const aged = MAX_TABS - 1;
     for (let tabId = 0; tabId < aged; tabId += 1) {
       cache.set(tabId, [item(`m-${tabId}`)]);
     }
     now.value = MAX_AGE_MS + 1;
-    cache.set(99, [item('fresh')]);
 
     expect(cache.cleanup()).toBe(aged);
-    expect(cache.stats().size).toBe(1);
+    expect(cache.stats().size).toBe(0);
     expect(cache.cleanup()).toBe(0);
+  });
+
+  it('reclaims expired entries when writing, so a live entry keeps its slot', () => {
+    const { cache, now } = setup();
+    for (let tabId = 0; tabId < MAX_TABS; tabId += 1) {
+      cache.set(tabId, [item(`m-${tabId}`)]);
+    }
+    now.value = MAX_AGE_MS + 1;
+    // Every existing entry is stale now; a fresh write should reclaim them rather
+    // than evict its way past them one at a time.
+    cache.set(1000, [item('fresh')]);
+
+    expect(cache.stats().size).toBe(1);
+    expect(cache.get(1000)).toBeDefined();
   });
 
   it('invalidates on navigation, so a stale page never answers', () => {

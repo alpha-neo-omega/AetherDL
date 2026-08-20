@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createHistoryService, RETENTION_WINDOWS_MS } from '@core/history/history';
+import {
+  createHistoryService,
+  HISTORY_MAX_RECORDS,
+  HISTORY_PRUNE_INTERVAL_MS,
+  RETENTION_WINDOWS_MS,
+} from '@core/history/history';
 import { createHistoryRepository } from '@core/storage/history-repository';
 import { createSettingsService } from '@core/settings/settings';
 import type { SettingsRepository } from '@core/storage';
@@ -203,5 +208,87 @@ describe('core/storage history repository', () => {
 
     await repository.clear();
     expect(await repository.load()).toEqual([]);
+  });
+});
+
+describe('core/history service: bounds (§12.1, §14.2)', () => {
+  /** Like `setup`, but with a clock the test moves. */
+  function bounded(initial?: Partial<Settings>) {
+    const store = createMemoryObjectStore();
+    let now = NOW;
+    const settings = createSettingsService({ repository: settingsRepository(initial) });
+    const service = createHistoryService({
+      repository: createHistoryRepository({ store }),
+      settings,
+      clock: () => now,
+      sessionStartedAt: NOW - DAY,
+    });
+    return {
+      store,
+      service,
+      advance(ms: number): void {
+        now += ms;
+      },
+      get now(): number {
+        return now;
+      },
+    };
+  }
+
+  it('stops growing at the ceiling, keeping the newest records', async () => {
+    // "Keep forever" is about time, not unbounded growth: without a ceiling the store
+    // grew with every download for the life of the profile.
+    const harness = bounded({ historyRetention: 'forever' });
+    for (let index = 0; index < HISTORY_MAX_RECORDS + 5; index += 1) {
+      harness.advance(1);
+      await harness.service.record(record({ id: `r${String(index)}`, timestamp: harness.now }));
+    }
+
+    const listed = await harness.service.list();
+    expect(listed).toHaveLength(HISTORY_MAX_RECORDS);
+    // The five oldest were dropped, not the five newest.
+    expect(listed[0]?.id).toBe(`r${String(HISTORY_MAX_RECORDS + 4)}`);
+    expect(listed.at(-1)?.id).toBe('r5');
+    expect(harness.store.records.size).toBe(HISTORY_MAX_RECORDS);
+  });
+
+  it('does not read the whole store for every download', async () => {
+    // Regression: recording swept the store after every append — 51 full reads for 50
+    // downloads, each one serialising every record.
+    const harness = bounded({ historyRetention: 'forever' });
+    for (let index = 0; index < 50; index += 1) {
+      await harness.service.record(record({ id: `r${String(index)}` }));
+    }
+
+    const reads = harness.store.calls.filter((call) => call.startsWith('getAll')).length;
+    expect(reads).toBeLessThanOrEqual(1);
+    expect(harness.store.records.size).toBe(50);
+  });
+
+  it('sweeps on the first record, then throttles, then sweeps again', async () => {
+    const harness = bounded({ historyRetention: '30d' });
+    // The first record always sweeps: nothing is known about the store yet.
+    await harness.service.record(record({ id: 'fresh', timestamp: NOW }));
+
+    // Inside the interval a sweep is skipped, so an aged record is still on disk…
+    await harness.service.record(record({ id: 'old', timestamp: NOW - 31 * DAY }));
+    expect(harness.store.records.has('old')).toBe(true);
+
+    harness.advance(HISTORY_PRUNE_INTERVAL_MS + 1);
+    await harness.service.record(record({ id: 'newer', timestamp: harness.now }));
+
+    // …and gone once the next sweep runs.
+    expect(harness.store.records.has('old')).toBe(false);
+    expect(harness.store.records.has('fresh')).toBe(true);
+    expect(harness.store.records.has('newer')).toBe(true);
+  });
+
+  it('never SHOWS a record past its retention, swept or not', async () => {
+    const harness = bounded({ historyRetention: '30d' });
+    await harness.service.record(record({ id: 'old', timestamp: NOW - 31 * DAY }));
+
+    // Listing always applies the window, so the promise the setting makes holds even
+    // between sweeps.
+    expect((await harness.service.list()).map((entry) => entry.id)).toEqual([]);
   });
 });

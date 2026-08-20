@@ -8,7 +8,7 @@
  * Restrictions: Runtime layer. Pure in-memory; clock injected for determinism. No
  *          browser globals.
  * Public API: TabDetectionStatus, TabRuntimeState, RuntimeHealth, RuntimeState,
- *          createRuntimeState.
+ *          MAX_TRACKED_TABS, createRuntimeState.
  */
 import type { DetectionReport, MediaItem } from '@shared/types';
 
@@ -81,12 +81,28 @@ export interface RuntimeState {
   health(): RuntimeHealth;
 }
 
+/**
+ * How many tabs may keep their detection payload in memory at once.
+ *
+ * Each tracked tab can hold its last report — up to 500 DOM signals and 500 observed
+ * URLs — plus the items built from it, and entries were only dropped when the tab
+ * closed. A long browsing session with many open tabs therefore grew without bound,
+ * against the idle-memory budget (§12.1). Beyond this many tabs the
+ * least-recently-updated ones are dropped; the active tab is never dropped, and a tab
+ * that is dropped simply re-detects when the user next opens the popup on it (§9.9).
+ * The number matches the detection cache's own tab bound so the two agree.
+ */
+export const MAX_TRACKED_TABS = 50;
+
 export interface RuntimeStateDeps {
   readonly clock: () => number;
+  /** Overrides {@link MAX_TRACKED_TABS}; for tests and tuning. */
+  readonly maxTabs?: number;
 }
 
 export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
   const { clock } = deps;
+  const maxTabs = Math.max(1, deps.maxTabs ?? MAX_TRACKED_TABS);
   const tabs = new Map<number, MutableTab>();
   const outstanding = new Map<number, number>();
   let activeTabId: number | undefined;
@@ -104,6 +120,26 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
     updatedAt: tab.updatedAt,
   });
 
+  /**
+   * Drop the least-recently-updated tabs once the map is over its bound. The active
+   * tab and any tab with work in flight are kept: evicting either would discard state
+   * the user is looking at or an operation is about to write to.
+   */
+  const evictIfNeeded = (): void => {
+    if (tabs.size <= maxTabs) {
+      return;
+    }
+    const candidates = [...tabs.values()]
+      .filter((tab) => tab.tabId !== activeTabId && (outstanding.get(tab.tabId) ?? 0) === 0)
+      .sort((left, right) => left.updatedAt - right.updatedAt);
+    for (const tab of candidates) {
+      if (tabs.size <= maxTabs) {
+        return;
+      }
+      tabs.delete(tab.tabId);
+    }
+  };
+
   const ensure = (tabId: number, url?: string): MutableTab => {
     let tab = tabs.get(tabId);
     if (tab === undefined) {
@@ -118,6 +154,7 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
         updatedAt: clock(),
       };
       tabs.set(tabId, tab);
+      evictIfNeeded();
     } else if (url !== undefined) {
       tab.url = url;
       tab.updatedAt = clock();

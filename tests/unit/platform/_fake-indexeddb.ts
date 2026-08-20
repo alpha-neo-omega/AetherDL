@@ -34,6 +34,9 @@ class FakeDatabase {
   version = 0;
   /** When set, `transaction()` throws — mirrors an InvalidStateError. */
   throwOnTransaction: Error | undefined;
+  /** When true, the FIRST `transaction()` throws and later ones succeed: what a
+   *  connection that died underneath the adapter looks like once it reconnects. */
+  throwOnTransactionOnce = false;
   /** When set, `objectStore()` throws — mirrors a NotFoundError. */
   throwOnObjectStore: Error | undefined;
   /** Operation names that must fail on their next call. */
@@ -45,6 +48,14 @@ class FakeDatabase {
   closed = 0;
   /** Set by a connection that wants to be told about another connection's upgrade. */
   onversionchange: Handler = null;
+  /** Set by a connection that wants to know when the browser closed it. */
+  onclose: Handler = null;
+
+  /** Simulate the browser closing this connection (storage cleared, db deleted). */
+  closeFromBrowser(): void {
+    this.throwOnTransactionOnce = true;
+    this.onclose?.();
+  }
 
   get objectStoreNames(): FakeObjectStoreNames {
     return new FakeObjectStoreNames(new Set(this.stores.keys()));
@@ -59,6 +70,10 @@ class FakeDatabase {
   }
 
   transaction(storeName: string, _mode: string): FakeTransaction {
+    if (this.throwOnTransactionOnce) {
+      this.throwOnTransactionOnce = false;
+      throw new Error('InvalidStateError: the database connection is closing');
+    }
     if (this.throwOnTransaction !== undefined) {
       throw this.throwOnTransaction;
     }
@@ -186,6 +201,8 @@ export interface FakeIndexedDb {
   blockNextOpen(): void;
   /** Simulate another connection requesting an upgrade of this database. */
   versionChange(databaseName: string): void;
+  /** Simulate the browser closing the connection (storage cleared, db deleted). */
+  closeConnection(databaseName: string): void;
   /** How many times a connection to this database was closed. */
   closedConnections(databaseName: string): number;
   /** Number of `open()` calls made so far. */
@@ -246,6 +263,9 @@ export function createFakeIndexedDb(): FakeIndexedDb {
       return database(databaseName).stores.get(storeName) ?? new Map<string, unknown>();
     },
     /** Simulate another connection requesting an upgrade of this database. */
+    closeConnection(databaseName: string): void {
+      database(databaseName).closeFromBrowser();
+    },
     versionChange(databaseName: string): void {
       database(databaseName).onversionchange?.();
     },

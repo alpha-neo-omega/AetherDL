@@ -30,7 +30,9 @@ const KIND_OPTIONS: readonly { readonly value: KindFilter; readonly key: Message
   { value: 'video', key: 'popup.kind.video' },
   { value: 'audio', key: 'popup.kind.audio' },
   { value: 'stream', key: 'popup.kind.stream' },
-  { value: 'image-sequence', key: 'popup.kind.imageSequence' },
+  // No `image-sequence` option: no detector produces that kind, so the filter could
+  // only ever return "no matches". The kind stays in the model for when one does
+  // (§4.12 — a filter must describe media that can actually appear).
 ];
 
 const SORT_OPTIONS: readonly { readonly value: SortSpec; readonly key: MessageKey }[] = [

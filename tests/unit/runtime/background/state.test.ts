@@ -91,3 +91,89 @@ describe('runtime state', () => {
     expect(health.lastErrorAt).toBeGreaterThan(0);
   });
 });
+
+describe('runtime state: tracked tabs are bounded (§12.1)', () => {
+  it('drops the least-recently-updated tab once the bound is passed', () => {
+    // Regression: every tracked tab held its last report — up to 500 DOM signals and
+    // 500 observed URLs — and entries were only dropped when the tab closed, so a long
+    // session with many tabs grew without bound.
+    let now = 0;
+    const state = createRuntimeState({
+      clock: () => {
+        now += 1;
+        return now;
+      },
+      maxTabs: 3,
+    });
+
+    for (const tabId of [1, 2, 3]) {
+      state.ensureTab(tabId);
+    }
+    state.setItems(1, []);
+    expect(state.tabs().map((tab) => tab.tabId)).toEqual([1, 2, 3]);
+
+    state.ensureTab(4);
+
+    // Tab 2 was the oldest untouched one; tab 1 was updated more recently.
+    expect(
+      state
+        .tabs()
+        .map((tab) => tab.tabId)
+        .sort(),
+    ).toEqual([1, 3, 4]);
+  });
+
+  it('never drops the active tab, however stale it looks', () => {
+    let now = 0;
+    const state = createRuntimeState({
+      clock: () => {
+        now += 1;
+        return now;
+      },
+      maxTabs: 2,
+    });
+
+    state.ensureTab(1);
+    state.setActiveTab(1);
+    state.ensureTab(2);
+    state.ensureTab(3);
+
+    expect(state.tabs().some((tab) => tab.tabId === 1)).toBe(true);
+  });
+
+  it('never drops a tab with work in flight', () => {
+    let now = 0;
+    const state = createRuntimeState({
+      clock: () => {
+        now += 1;
+        return now;
+      },
+      maxTabs: 2,
+    });
+
+    state.ensureTab(1);
+    state.beginOperation(1);
+    state.ensureTab(2);
+    state.ensureTab(3);
+
+    // Evicting it would discard state the in-flight detection is about to write.
+    expect(state.tabs().some((tab) => tab.tabId === 1)).toBe(true);
+  });
+
+  it('a dropped tab simply detects again, rather than showing stale media', () => {
+    let now = 0;
+    const state = createRuntimeState({
+      clock: () => {
+        now += 1;
+        return now;
+      },
+      maxTabs: 1,
+    });
+
+    state.setItems(1, []);
+    state.ensureTab(2);
+
+    expect(state.getItems(1)).toEqual([]);
+    expect(state.getReport(1)).toBeUndefined();
+  });
+});

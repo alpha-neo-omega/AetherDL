@@ -8,7 +8,8 @@
  *          erasable: it is never transmitted anywhere (§14.1, §14.4). Recording is
  *          skipped entirely while "Keep history" is off, so opting out means no data
  *          is created rather than data being hidden (§2.10).
- * Public API: RETENTION_WINDOWS_MS, HistoryServiceDeps, createHistoryService.
+ * Public API: RETENTION_WINDOWS_MS, HISTORY_MAX_RECORDS, HISTORY_PRUNE_INTERVAL_MS,
+ *          HistoryServiceDeps, createHistoryService.
  */
 import type { AppError } from '@shared/result';
 import { StorageError } from '@shared/result/errors';
@@ -18,6 +19,22 @@ import type { HistoryRepository } from '@core/storage';
 import type { HistoryService } from '@core/history';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Hard ceiling on stored records, applied whatever the retention choice. "Keep
+ * forever" is about time, not about unbounded growth: without a ceiling the store
+ * grew with every download for the life of the profile, and every listing had to read
+ * all of it (§12.1, §14.2). Beyond the cap the OLDEST records are dropped.
+ */
+export const HISTORY_MAX_RECORDS = 5_000;
+
+/**
+ * How often an append may trigger the age-based sweep. Recording used to read the
+ * whole store after every single download — 51 full reads for 50 downloads — which is
+ * pure waste when nothing has aged out yet (§12.1). Listing always sweeps, so nothing
+ * past its retention is ever SHOWN; this only bounds how eagerly it is deleted.
+ */
+export const HISTORY_PRUNE_INTERVAL_MS = 60_000;
 
 /** Retention windows in milliseconds; `undefined` means "no age limit" (§4.9). */
 export const RETENTION_WINDOWS_MS: Readonly<Record<HistoryRetention, number | undefined>> = {
@@ -42,6 +59,9 @@ export interface HistoryServiceDeps {
 
 export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
   const { repository, settings, clock, sessionStartedAt } = deps;
+  /** Records known to be stored; `undefined` until something has counted them. */
+  let knownCount: number | undefined;
+  let lastPruneAt = 0;
 
   const report = (operation: string, cause: unknown): void => {
     deps.onError?.(
@@ -71,26 +91,36 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
     }
   };
 
-  /** Apply the retention policy, deleting anything that has aged out (§4.11). */
+  const drop = async (records: readonly HistoryRecord[]): Promise<void> => {
+    for (const record of records) {
+      try {
+        await repository.delete(record.id);
+      } catch (cause) {
+        report('prune', cause);
+      }
+    }
+  };
+
+  /**
+   * Apply both limits: the retention window the user chose, and the hard record
+   * ceiling. Returns what remains.
+   */
   const prune = async (records: readonly HistoryRecord[]): Promise<readonly HistoryRecord[]> => {
     const { historyRetention } = await settings.get();
     const cutoff = cutoffFor(historyRetention);
-    if (cutoff === undefined) {
-      return records;
+    const expired = cutoff === undefined ? [] : records.filter((r) => r.timestamp < cutoff);
+    let kept = cutoff === undefined ? [...records] : records.filter((r) => r.timestamp >= cutoff);
+
+    // Oldest first out, so what the user keeps is what they did most recently.
+    if (kept.length > HISTORY_MAX_RECORDS) {
+      kept.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
+      const overflow = kept.slice(HISTORY_MAX_RECORDS);
+      kept = kept.slice(0, HISTORY_MAX_RECORDS);
+      await drop(overflow);
     }
-    const kept = records.filter((record) => record.timestamp >= cutoff);
-    if (kept.length === records.length) {
-      return records;
-    }
-    for (const expired of records) {
-      if (expired.timestamp < cutoff) {
-        try {
-          await repository.delete(expired.id);
-        } catch (cause) {
-          report('prune', cause);
-        }
-      }
-    }
+    await drop(expired);
+    lastPruneAt = clock();
+    knownCount = kept.length;
     return kept;
   };
 
@@ -106,7 +136,14 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
         report('append', cause);
         return;
       }
-      await prune(await readAll());
+      knownCount = knownCount === undefined ? undefined : knownCount + 1;
+      // Sweep when the count is unknown, when the ceiling may have been passed, or
+      // when the last sweep is old enough to be worth repeating. Otherwise recording a
+      // download costs exactly one write.
+      const overCap = knownCount === undefined || knownCount > HISTORY_MAX_RECORDS;
+      if (overCap || clock() - lastPruneAt >= HISTORY_PRUNE_INTERVAL_MS) {
+        await prune(await readAll());
+      }
     },
 
     async list(): Promise<readonly HistoryRecord[]> {
@@ -116,6 +153,7 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
     },
 
     async delete(id: string): Promise<void> {
+      knownCount = knownCount === undefined || knownCount === 0 ? knownCount : knownCount - 1;
       try {
         await repository.delete(id);
       } catch (cause) {
@@ -124,6 +162,7 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
     },
 
     async clear(): Promise<void> {
+      knownCount = 0;
       try {
         await repository.clear();
       } catch (cause) {

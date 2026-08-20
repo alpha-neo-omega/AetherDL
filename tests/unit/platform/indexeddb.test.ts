@@ -186,3 +186,81 @@ describe('platform/storage indexeddb: a database it does not own alone', () => {
     expect(await store.get('a')).toEqual({ n: 1 });
   });
 });
+
+describe('platform/storage: a connection that dies underneath the adapter', () => {
+  it('reconnects and completes the write instead of failing for the rest of the session', async () => {
+    // Regression: the dead handle stayed cached, so every later read and write failed
+    // until the worker restarted — the queue silently stopped persisting (§20.7).
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbObjectStore<{ v: number }>({
+      databaseName: 'aetherdl-probe',
+      storeName: 'items',
+      factory: fake.factory,
+    });
+
+    await store.put('a', { v: 1 });
+    fake.closeConnection('aetherdl-probe');
+
+    await expect(store.put('b', { v: 2 })).resolves.toBeUndefined();
+    await expect(store.get('b')).resolves.toEqual({ v: 2 });
+    // Exactly one extra open: the retry, not a loop.
+    expect(fake.contents('aetherdl-probe', 'items').size).toBe(2);
+  });
+
+  it('recovers a read the same way', async () => {
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbObjectStore<{ v: number }>({
+      databaseName: 'aetherdl-probe',
+      storeName: 'items',
+      factory: fake.factory,
+    });
+
+    await store.put('a', { v: 1 });
+    fake.closeConnection('aetherdl-probe');
+
+    await expect(store.getAll()).resolves.toEqual([{ v: 1 }]);
+  });
+
+  it('still reports a store that is genuinely broken, rather than retrying forever', async () => {
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbObjectStore<{ v: number }>({
+      databaseName: 'aetherdl-probe',
+      storeName: 'items',
+      factory: fake.factory,
+    });
+    await store.put('a', { v: 1 });
+    fake.breakTransactions('aetherdl-probe', new Error('InvalidStateError: gone'));
+
+    await expect(store.put('b', { v: 2 })).rejects.toMatchObject({
+      code: 'storage-idb-put-failed',
+    });
+  });
+});
+
+describe('platform/storage: a read transaction that aborts on its own', () => {
+  it('rejects rather than leaving the caller waiting', async () => {
+    // A transaction can abort without any request erroring (storage eviction, a
+    // forced close). A read that never settles would hang queue hydration, and with
+    // it every download message handler.
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbObjectStore<{ v: number }>({
+      databaseName: 'aetherdl-probe',
+      storeName: 'items',
+      factory: fake.factory,
+    });
+    await store.put('a', { v: 1 });
+    fake.abortNext('aetherdl-probe', 'getAll');
+
+    const outcome = await Promise.race([
+      store.getAll().then(
+        () => 'resolved',
+        () => 'rejected',
+      ),
+      new Promise((resolve) => {
+        setTimeout(() => resolve('hung'), 200);
+      }),
+    ]);
+
+    expect(outcome).toBe('rejected');
+  });
+});

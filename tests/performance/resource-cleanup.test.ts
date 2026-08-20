@@ -22,6 +22,7 @@ import type { SettingsRepository } from '@core/storage';
 import type { QueueStats } from '@core/download/queue';
 import type { Settings } from '@shared/types';
 import { TypedEventEmitter } from '@shared/utils';
+import { MAX_TRACKED_TABS } from '@runtime/background/state';
 import {
   createBackgroundDownloadRuntime,
   createDetectionItemResolver,
@@ -131,7 +132,10 @@ describe('resource cleanup: background detection runtime', () => {
       fake.onTabCreated.trigger({ id: tabId, active: false, url: 'https://example.com' });
       fake.onActivated.trigger({ tabId, windowId: 1 });
     }
-    expect(runtime.state.tabs()).toHaveLength(1000);
+    // Tracking is bounded: a thousand open tabs do not mean a thousand retained
+    // records, each able to hold a full page report (§12.1). Beyond the bound the
+    // least-recently-updated are dropped, and an evicted tab re-detects on demand.
+    expect(runtime.state.tabs().length).toBeLessThanOrEqual(MAX_TRACKED_TABS);
 
     for (let tabId = 1; tabId <= 1000; tabId += 1) {
       fake.onTabRemoved.trigger(tabId, { windowId: 1, isWindowClosing: false });

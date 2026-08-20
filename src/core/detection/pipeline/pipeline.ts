@@ -7,6 +7,7 @@
  */
 import type { PlatformError } from '@shared/result/errors';
 import type { MediaItem } from '@shared/types';
+import { UNTITLED_MEDIA_TITLE } from '@shared/constants';
 import { getHost } from '@shared/utils';
 import type { Deduplicator } from '@core/detection/dedupe';
 import { computeIdentityKey } from '@core/detection/dedupe/dedupe';
@@ -37,7 +38,7 @@ function buildDraft(
   const extension = extracted.extension ?? candidate.container;
   const mimeType = candidate.mimeType ?? extracted.mimeType;
   const filename = candidate.filename ?? extracted.filename;
-  const title = candidate.title ?? filename ?? context.documentTitle ?? 'Untitled media';
+  const title = candidate.title ?? filename ?? context.documentTitle ?? UNTITLED_MEDIA_TITLE;
   // `blob:` URLs have an empty host; fall back to the page host (the media belongs
   // to the page) so origin grouping stays meaningful (§4.2).
   const sourceHost = getHost(candidate.originalUrl ?? candidate.url);

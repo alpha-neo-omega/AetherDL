@@ -24,8 +24,8 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.2.0 — defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0 stable
-release: per-tab media
+**1.2.1 — second defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0
+stable release: per-tab media
 detection, downloads through the browser's own download manager with a durable queue, retry and
 pause/resume, settings, local history, popup and settings surfaces, and the optional context-menu
 and notification integrations.
@@ -65,11 +65,19 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
-### What 1.2.0 fixed
+### What the defect sweeps fixed
 
-Thirteen defects, found by hunting through the 1.1.0 code. Three produced silently wrong
-results, which is the worst class of failure this project can ship. The ones that matter to
-a user:
+**1.2.1** hunted the detection engine and the storage layer, the two areas with the most
+logic and the least recent scrutiny. Eight defects, all fixed; the one worth knowing about:
+a dead IndexedDB connection was cached forever, so if the browser closed the connection —
+storage cleared, database deleted — the extension **silently stopped saving the queue and
+recording history for the rest of the session**. It now reconnects. Also: history no longer
+grows without bound (5 000 records, oldest out), per-tab detection state is bounded to 50
+tabs, and a queue save writes only the job that changed instead of every job.
+
+**1.2.0** fixed thirteen defects found by hunting through the 1.1.0 code. Three produced
+silently wrong results, which is the worst class of failure this project can ship. The ones
+that matter to a user:
 
 - A stream whose **audio is a separate track** was saved as video with **no sound**. It is
   now refused with a stated reason (see the limitations below).
@@ -80,7 +88,7 @@ a user:
   nothing had asked for host access. Every path asks now.
 - **Site access is listed in Settings**, with a Revoke for each granted origin.
 
-Known limitations at 1.2.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
+Known limitations at 1.2.1, stated in full in [CHANGELOG.md](CHANGELOG.md):
 
 - **Streams that keep audio in a separate track cannot be downloaded.** Most real-world
   DASH, and much HLS, is packaged that way. AetherDL refuses rather than saving a silent

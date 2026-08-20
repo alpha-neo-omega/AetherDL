@@ -215,8 +215,13 @@ function toTask(record: PersistedDownloadTask): DownloadTask {
 
 export function createQueueRepository(deps: QueueRepositoryDeps): QueueRepository {
   const { store, onError } = deps;
-  /** Ids currently in the store; lets `save` diff without re-reading everything. */
-  let known: Set<string> | undefined;
+  /**
+   * What is currently in the store, id → the exact record last written for it. The
+   * value is what makes a save a DIFF: `save` is called on every queue mutation, and
+   * a progress patch on one job used to rewrite every record in the queue — a hundred
+   * writes to change one number (§12.1, §8.14).
+   */
+  let known: Map<string, string> | undefined;
   /** Set when a read failed: further writes are skipped so unreadable durable data
    *  is never overwritten by a queue that could not be reconstructed (§20.7). */
   let readFailed = false;
@@ -242,7 +247,7 @@ export function createQueueRepository(deps: QueueRepositoryDeps): QueueRepositor
             new Error(`Dropped ${raw.length - records.length} bad record(s)`),
           );
         }
-        known = new Set(records.map((record) => record.id));
+        known = new Map(records.map((record) => [record.id, JSON.stringify(record)]));
         readFailed = false;
         return records.map(toTask);
       } catch (cause) {
@@ -259,20 +264,33 @@ export function createQueueRepository(deps: QueueRepositoryDeps): QueueRepositor
       try {
         if (known === undefined) {
           const existing = await store.getAll();
-          known = new Set(existing.filter(isPersistedTask).map((record) => record.id));
+          known = new Map(
+            existing
+              .filter(isPersistedTask)
+              .map((record) => [record.id, JSON.stringify(record)] as const),
+          );
         }
-        const next = new Map(tasks.map((task) => [task.id, toPersisted(task)]));
+        const next = new Map(
+          tasks.map((task) => {
+            const record = toPersisted(task);
+            return [task.id, { record, serialized: JSON.stringify(record) }] as const;
+          }),
+        );
         // Delete before writing: a crash mid-save can then leave stale-but-valid
         // records at worst, never resurrect a job the user removed (§20.7).
-        for (const id of known) {
+        for (const id of known.keys()) {
           if (!next.has(id)) {
             await store.delete(id);
           }
         }
-        for (const [id, record] of next) {
-          await store.put(id, record);
+        // Write only what actually changed. An unchanged record is already durable, so
+        // rewriting it buys nothing and costs a transaction.
+        for (const [id, entry] of next) {
+          if (known.get(id) !== entry.serialized) {
+            await store.put(id, entry.record);
+          }
         }
-        known = new Set(next.keys());
+        known = new Map([...next].map(([id, entry]) => [id, entry.serialized]));
       } catch (cause) {
         // The in-memory queue stays authoritative for this session; the next save
         // re-reconciles the store from scratch.

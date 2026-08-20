@@ -315,3 +315,64 @@ describe('core/storage durable queue repository', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 });
+
+describe('queue repository: a save writes only what changed (§12.1)', () => {
+  it('rewrites one record when one job changed, not the whole queue', async () => {
+    // Regression: `save` is called on every queue mutation, and it used to put every
+    // task each time — a hundred writes to move one progress number.
+    const store = createMemoryObjectStore();
+    const repository = createQueueRepository({ store, onError: () => undefined });
+    const tasks = [
+      downloadTask({ id: 'a' }),
+      downloadTask({ id: 'b' }),
+      downloadTask({ id: 'c' }),
+      downloadTask({ id: 'd' }),
+      downloadTask({ id: 'e' }),
+    ];
+
+    await repository.save(tasks);
+    const initialPuts = store.calls.filter((call) => call.startsWith('put:')).length;
+    expect(initialPuts).toBe(5);
+
+    await repository.save([{ ...downloadTask({ id: 'a' }), bytesTotal: 4096 }, ...tasks.slice(1)]);
+
+    const puts = store.calls.filter((call) => call.startsWith('put:')).slice(initialPuts);
+    expect(puts).toEqual(['put:a']);
+  });
+
+  it('writes nothing at all when nothing changed', async () => {
+    const store = createMemoryObjectStore();
+    const repository = createQueueRepository({ store, onError: () => undefined });
+    const tasks = [downloadTask({ id: 'a' }), downloadTask({ id: 'b' })];
+
+    await repository.save(tasks);
+    const before = store.calls.length;
+    await repository.save(tasks);
+
+    expect(store.calls.slice(before)).toEqual([]);
+  });
+
+  it('still removes a job that left the queue', async () => {
+    const store = createMemoryObjectStore();
+    const repository = createQueueRepository({ store, onError: () => undefined });
+
+    await repository.save([downloadTask({ id: 'a' }), downloadTask({ id: 'b' })]);
+    await repository.save([downloadTask({ id: 'a' })]);
+
+    expect([...store.records.keys()]).toEqual(['a']);
+  });
+
+  it('re-reconciles from the store after a failed save', async () => {
+    const store = createMemoryObjectStore();
+    const repository = createQueueRepository({ store, onError: () => undefined });
+    await repository.save([downloadTask({ id: 'a' })]);
+
+    store.failing.add('put');
+    await repository.save([{ ...downloadTask({ id: 'a' }), bytesTotal: 1 }]);
+    store.failing.delete('put');
+
+    // The diff baseline was dropped, so the next save re-reads and writes what it must.
+    await repository.save([{ ...downloadTask({ id: 'a' }), bytesTotal: 1 }]);
+    expect((store.records.get('a') as { bytesTotal?: number }).bytesTotal).toBe(1);
+  });
+});
