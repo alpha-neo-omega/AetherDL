@@ -79,7 +79,9 @@ export function createContextMenuRuntime(deps: ContextMenuRuntimeDeps): ContextM
    * that happens at point-of-use in Settings, on a user gesture (§13.3).
    */
   const isAvailable = async (): Promise<boolean> => {
-    if (browser.menus === undefined) {
+    // `available()` is asked per call: the namespace appears the moment the user
+    // grants the permission, and the feature must come alive without a restart.
+    if (browser.menus?.available() !== true) {
       return false;
     }
     try {
@@ -92,7 +94,7 @@ export function createContextMenuRuntime(deps: ContextMenuRuntimeDeps): ContextM
 
   const removeAll = async (): Promise<void> => {
     const menus = browser.menus;
-    if (menus === undefined) {
+    if (menus === undefined || !menus.available()) {
       present.clear();
       return;
     }
@@ -106,7 +108,27 @@ export function createContextMenuRuntime(deps: ContextMenuRuntimeDeps): ContextM
     }
   };
 
-  const sync = async (): Promise<void> => {
+  /**
+   * Attach the click listener the first time the feature is actually available. It
+   * cannot be attached at start-up: on Chromium the namespace does not exist until the
+   * permission is granted, and a listener attached to nothing would never fire again.
+   */
+  const attachClicks = (): void => {
+    if (unsubscribe !== undefined || browser.menus?.available() !== true) {
+      return;
+    }
+    unsubscribe = browser.menus.onClicked((id) => {
+      if (!id.startsWith(MENU_ID_PREFIX)) {
+        return;
+      }
+      const itemId = id.slice(MENU_ID_PREFIX.length);
+      void deps.enqueue([itemId]).catch((cause: unknown) => {
+        deps.onError(toAppError('contextmenu-enqueue-failed', cause));
+      });
+    });
+  };
+
+  const syncOnce = async (): Promise<void> => {
     if (disposed) {
       return;
     }
@@ -121,6 +143,7 @@ export function createContextMenuRuntime(deps: ContextMenuRuntimeDeps): ContextM
       await removeAll();
       return;
     }
+    attachClicks();
 
     // Only supported media is offered; protected items are never downloadable (§6.3).
     const wanted = deps
@@ -153,21 +176,27 @@ export function createContextMenuRuntime(deps: ContextMenuRuntimeDeps): ContextM
     }
   };
 
+  /**
+   * Syncs run one at a time. Two overlapping runs both read `present`, so one could
+   * remove an entry the other had just decided to keep — churn, flicker and spurious
+   * "duplicate id" errors.
+   */
+  let syncing: Promise<void> = Promise.resolve();
+  const sync = (): Promise<void> => {
+    const run = syncing.then(syncOnce, syncOnce);
+    syncing = run.catch(() => undefined);
+    return run;
+  };
+
   return {
     start(): void {
       if (started || browser.menus === undefined) {
         return;
       }
       started = true;
-      unsubscribe = browser.menus.onClicked((id) => {
-        if (!id.startsWith(MENU_ID_PREFIX)) {
-          return;
-        }
-        const itemId = id.slice(MENU_ID_PREFIX.length);
-        void deps.enqueue([itemId]).catch((cause: unknown) => {
-          deps.onError(toAppError('contextmenu-enqueue-failed', cause));
-        });
-      });
+      // Attach now when the permission is already granted; otherwise the first sync
+      // that finds the feature available attaches it.
+      attachClicks();
     },
 
     sync,

@@ -15,6 +15,7 @@ import { createI18nService } from '@platform/browser/i18n';
 import { createRuntimeService } from '@platform/browser/runtime';
 import { resolveWebExtApi, type PlatformTarget, type WebExtApi } from '@platform/browser/webext';
 import { createDownloadsService } from '@platform/downloads/service';
+import { readManifest } from '@platform/browser/manifest';
 import { createMenusService, resolveMenus } from '@platform/menus/service';
 import { createMessageBus } from '@platform/messaging/service';
 import { createNotificationsService } from '@platform/notifications/service';
@@ -29,7 +30,17 @@ export function createBrowserFrom(api: WebExtApi, target: PlatformTarget): Brows
   // The optional namespaces only exist once their optional permission is granted
   // (§13.3), so each adapter is constructed only when its namespace is present and
   // the facade leaves the member undefined otherwise (§7.2 graceful degradation).
-  const menus = resolveMenus(api);
+  // The menu namespace appears the moment the optional permission is granted, so the
+  // adapter is constructed wherever the capability COULD exist — the namespace is
+  // already there, or this target declares the permission as optional — and resolves
+  // it per call. Deciding once at start-up left the feature dead for the rest of the
+  // session after the user granted it (§13.3, §7.2). A target that cannot offer the
+  // permission at all (Firefox, §7.4) still gets no adapter.
+  const menusOfferable =
+    resolveMenus(api) !== undefined ||
+    readManifest(api).optionalPermissions.some(
+      (permission) => permission === 'contextMenus' || permission === 'menus',
+    );
   const messaging = createMessageBus(api);
   return {
     target,
@@ -43,7 +54,7 @@ export function createBrowserFrom(api: WebExtApi, target: PlatformTarget): Brows
     action: createActionService(api),
     scripting: createScriptingService(api),
     i18n: createI18nService(api),
-    ...(menus !== undefined && { menus: createMenusService(menus) }),
+    ...(menusOfferable && { menus: createMenusService(() => resolveMenus(api)) }),
     // Chromium only: a service worker has no blob-URL factory, so assembly happens
     // in an offscreen document reached through this client (§10.6, §7.4).
     ...(api.offscreen !== undefined && {

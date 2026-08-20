@@ -266,3 +266,70 @@ describe('background notification runtime', () => {
     expect(harness.fake.notifications.size).toBe(0);
   });
 });
+
+describe('notifications: a bulk run is announced once (§4.10)', () => {
+  it('announces only the summary, even as the batch drains', async () => {
+    // Regression: a batch drains, so by the time the last jobs finished only one —
+    // then none — was in flight, and each produced its own toast on top of the
+    // summary. A three-job batch announced twice and then summarised.
+    const harness = setup({ stats: { active: 1, queued: 2 } });
+
+    harness.setStats({ active: 1, queued: 1 });
+    harness.emitter.emit('download:completed', task('job-1'));
+    await flush();
+    harness.setStats({ active: 1 });
+    harness.emitter.emit('download:completed', task('job-2'));
+    await flush();
+    harness.setStats({});
+    harness.emitter.emit('download:completed', task('job-3'));
+    harness.emitter.emit('queue:completed', { completed: 3, failed: 0, canceled: 0 });
+    await flush();
+
+    expect([...harness.fake.notifications.values()].map((entry) => entry.title)).toEqual([
+      'Downloads finished',
+    ]);
+  });
+
+  it('announces a lone download once, and does not also summarise it', async () => {
+    const harness = setup({ stats: { active: 1 } });
+
+    harness.emitter.emit('download:completed', task('job-1'));
+    harness.setStats({});
+    harness.emitter.emit('queue:completed', { completed: 1, failed: 0, canceled: 0 });
+    await flush();
+
+    // One download, one notification — not the job and then "downloads finished".
+    expect([...harness.fake.notifications.values()].map((entry) => entry.title)).toEqual([
+      'Download complete',
+    ]);
+  });
+
+  it('goes back to per-job announcements after a bulk run ends', async () => {
+    const harness = setup({ stats: { active: 2 } });
+
+    harness.emitter.emit('download:completed', task('job-1'));
+    harness.setStats({});
+    harness.emitter.emit('queue:completed', { completed: 2, failed: 0, canceled: 0 });
+    await flush();
+    harness.emitter.emit('download:completed', task('later-job'));
+    await flush();
+
+    expect([...harness.fake.notifications.values()].map((entry) => entry.title)).toEqual([
+      'Downloads finished',
+      'Download complete',
+    ]);
+  });
+
+  it('treats work queued behind a running job as a bulk run', async () => {
+    const harness = setup({ stats: { active: 1 } });
+
+    // A second job arrives while the first is still running.
+    harness.setStats({ active: 1, queued: 1 });
+    harness.emitter.emit('download:queued', task('job-2'));
+    harness.setStats({ active: 1 });
+    harness.emitter.emit('download:completed', task('job-1'));
+    await flush();
+
+    expect(harness.fake.notifications.size).toBe(0);
+  });
+});

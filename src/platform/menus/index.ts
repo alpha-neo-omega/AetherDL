@@ -13,6 +13,13 @@ export interface MenuItemSpec {
 }
 
 export interface MenusAdapter {
+  /**
+   * Whether the menu namespace exists RIGHT NOW. The namespace appears the moment the
+   * optional permission is granted, so this is asked per call rather than answered
+   * once at start-up: a build that decided at boot left the feature dead for the rest
+   * of the session after the user granted it (§13.3, §7.2).
+   */
+  available(): boolean;
   create(spec: MenuItemSpec): Promise<void>;
   remove(id: string): Promise<void>;
   onClicked(listener: (id: string) => void): () => void;

@@ -99,17 +99,28 @@ export function createNotificationRuntime(deps: NotificationRuntimeDeps): Notifi
   };
 
   /**
-   * A bulk run gets one summary, not one toast per job (§4.10): while more than a
-   * single job is still in flight, per-job outcomes stay quiet and `queue:completed`
-   * reports the batch.
+   * A bulk run gets one summary, not one toast per job (§4.10).
+   *
+   * Checking "is more than one job in flight right now" is not enough: a batch drains,
+   * so by the time the last two jobs finish only one — then none — is in flight, and
+   * each of them produced its own toast on top of the summary. A three-job batch
+   * announced twice and then summarised. The run is therefore remembered: once more
+   * than one job has been seen in flight, per-job outcomes stay quiet until the queue
+   * drains and `queue:completed` reports the batch.
    */
-  const isBulk = (): boolean => {
+  let bulkRun = false;
+
+  const noteInFlight = (): void => {
     const { stats } = downloads.snapshot();
-    return stats.queued + stats.preparing + stats.active + stats.retrying + stats.paused > 1;
+    const inFlight = stats.queued + stats.preparing + stats.active + stats.retrying + stats.paused;
+    if (inFlight > 1) {
+      bulkRun = true;
+    }
   };
 
   const announce = (task: DownloadTask, kind: 'completed' | 'failed'): void => {
-    if (isBulk()) {
+    noteInFlight();
+    if (bulkRun) {
       return;
     }
     const copy = kind === 'completed' ? deps.copy.completed(task) : deps.copy.failed(task);
@@ -131,7 +142,23 @@ export function createNotificationRuntime(deps: NotificationRuntimeDeps): Notifi
         downloads.on('download:failed', (task) => {
           announce(task, 'failed');
         }),
+        // Anything that adds work can make a run bulk, including work queued while
+        // an earlier job is still finishing.
+        downloads.on('download:queued', () => {
+          noteInFlight();
+        }),
+        downloads.on('download:started', () => {
+          noteInFlight();
+        }),
         downloads.on('queue:completed', (summary) => {
+          // The run is over: the next single download is announced on its own again.
+          const wasBulk = bulkRun;
+          bulkRun = false;
+          if (!wasBulk) {
+            // One job, already announced by `announce`. A second toast saying the
+            // queue finished would be the same news twice.
+            return;
+          }
           const copy = deps.copy.queueCompleted(summary);
           void show('aetherdl:queue-completed', copy.title, copy.message);
         }),

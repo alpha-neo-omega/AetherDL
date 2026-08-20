@@ -6,10 +6,35 @@ import { createNotificationsService } from '@platform/notifications/service';
 import { createFakeWebExt } from './_fake-webext';
 
 describe('platform/menus', () => {
-  it('is absent until the optional permission exposes the namespace', () => {
+  it('exists but reports itself unavailable until the namespace appears', () => {
+    // The namespace appears the moment the optional permission is granted, so the
+    // adapter is built wherever the permission is offerable and answers honestly in
+    // the meantime. Deciding at start-up left the feature dead for the whole session
+    // after a grant.
     const bare = createFakeWebExt();
     expect(resolveMenus(bare.api)).toBeUndefined();
-    expect(createBrowserFrom(bare.api, 'chrome').menus).toBeUndefined();
+
+    const adapter = createBrowserFrom(bare.api, 'chrome').menus;
+    expect(adapter).toBeDefined();
+    expect(adapter?.available()).toBe(false);
+  });
+
+  it('is absent entirely where the permission cannot be offered at all', () => {
+    // Firefox declares no optional menus permission, so there is nothing to wait for.
+    const firefox = createFakeWebExt({ firefox: true, optionalPermissions: ['notifications'] });
+    expect(createBrowserFrom(firefox.api, 'firefox').menus).toBeUndefined();
+  });
+
+  it('picks up a namespace that appears after start-up', () => {
+    const fake = createFakeWebExt();
+    const adapter = createBrowserFrom(fake.api, 'chrome').menus;
+    expect(adapter?.available()).toBe(false);
+
+    // What granting the permission looks like from the extension's side.
+    const granted = createFakeWebExt({ contextMenus: true });
+    (fake.api as { contextMenus?: unknown }).contextMenus = granted.api.contextMenus;
+
+    expect(adapter?.available()).toBe(true);
   });
 
   it('uses contextMenus on Chromium and menus on Firefox', () => {
@@ -24,7 +49,7 @@ describe('platform/menus', () => {
 
   it('creates and removes entries', async () => {
     const fake = createFakeWebExt({ contextMenus: true });
-    const menus = createMenusService(resolveMenus(fake.api)!);
+    const menus = createMenusService(() => resolveMenus(fake.api));
 
     await menus.create({ id: 'a', title: 'Download', contexts: ['video', 'link'] });
     expect(fake.menuItems.get('a')).toEqual({
@@ -39,7 +64,7 @@ describe('platform/menus', () => {
 
   it('reports a create or remove that the browser refuses', async () => {
     const fake = createFakeWebExt({ contextMenus: true });
-    const menus = createMenusService(resolveMenus(fake.api)!);
+    const menus = createMenusService(() => resolveMenus(fake.api));
     fake.failMenus = true;
 
     await expect(menus.create({ id: 'a', title: 'x', contexts: ['link'] })).rejects.toMatchObject({
@@ -51,7 +76,7 @@ describe('platform/menus', () => {
 
   it('delivers clicks by entry id and detaches the upstream listener', () => {
     const fake = createFakeWebExt({ contextMenus: true });
-    const menus = createMenusService(resolveMenus(fake.api)!);
+    const menus = createMenusService(() => resolveMenus(fake.api));
     const seen: string[] = [];
 
     const unsubscribe = menus.onClicked((id) => seen.push(id));

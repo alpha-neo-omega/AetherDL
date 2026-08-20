@@ -272,3 +272,64 @@ describe('background context menu runtime', () => {
     expect(harness.fake.onMenuClicked.size).toBe(1);
   });
 });
+
+describe('context menu: a permission granted after start-up (§13.3)', () => {
+  it('comes alive on the next sync instead of staying dead until a restart', async () => {
+    // On Chromium the menu namespace does not exist until the permission is granted.
+    // The runtime used to decide at start-up, so granting the permission left the
+    // feature dead — no entries, no clicks — for the rest of the session.
+    const fake = createFakeWebExt();
+    const browser = createBrowserFrom(fake.api, 'chrome');
+    const enqueued: string[][] = [];
+    const items: readonly MediaItem[] = [mediaItem({ id: 'a', title: 'Clip' })];
+    const runtime = createContextMenuRuntime({
+      browser,
+      getSettings: () => Promise.resolve({ ...DEFAULT_SETTINGS, contextMenu: true }),
+      getActiveItems: () => items,
+      enqueue: (itemIds) => {
+        enqueued.push([...itemIds]);
+        return Promise.resolve();
+      },
+      entryTitle: (item) => `Download with AetherDL: ${item.title}`,
+      onError: () => undefined,
+    });
+    runtime.start();
+
+    await runtime.sync();
+    expect(fake.menuItems.size).toBe(0);
+
+    // The user grants it: the namespace appears and the permission is held.
+    const granted = createFakeWebExt({ contextMenus: true });
+    (fake.api as { contextMenus?: unknown }).contextMenus = granted.api.contextMenus;
+    fake.grantedPermissions.add('contextMenus');
+
+    await runtime.sync();
+
+    // The entries land in the namespace that appeared, which is what the extension
+    // now holds.
+    expect(granted.menuItems.size).toBe(1);
+    // And a click on the new entry reaches the download path.
+    granted.onMenuClicked.trigger({ menuItemId: 'aetherdl:download:a' });
+    expect(enqueued).toEqual([['a']]);
+    await runtime.dispose();
+  });
+});
+
+describe('context menu: overlapping syncs', () => {
+  it('runs them one at a time, so neither undoes the other', async () => {
+    const harness = setup({
+      settings: { contextMenu: true },
+      items: [mediaItem({ id: 'a', title: 'A' }), mediaItem({ id: 'b', title: 'B' })],
+    });
+
+    await Promise.all([harness.runtime.sync(), harness.runtime.sync(), harness.runtime.sync()]);
+
+    expect([...harness.fake.menuItems.keys()].sort()).toEqual([
+      'aetherdl:download:a',
+      'aetherdl:download:b',
+    ]);
+    // No churn reported: no duplicate creates, no removes of entries still wanted.
+    expect(harness.errors).toEqual([]);
+    await harness.runtime.dispose();
+  });
+});

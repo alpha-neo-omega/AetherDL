@@ -6,8 +6,10 @@
  *          nowhere else (§8.2).
  * Restrictions: Platform layer — adapts only. No decision about WHICH entries exist
  *          or when they are shown; that is the background's job (§8.2). The namespace
- *          is absent until the optional permission is granted, so the factory only
- *          constructs this adapter when the capability is present (§13.3).
+ *          is absent until the optional permission is granted and appears the moment
+ *          it is, so it is resolved PER CALL: the adapter is constructed wherever the
+ *          capability could exist, and `available()` tells the truth at the time of
+ *          asking (§13.3, §7.2).
  * Public API: createMenusService, resolveMenus.
  */
 import type { MenuItemSpec, MenusAdapter } from '@platform/menus';
@@ -25,9 +27,19 @@ export function resolveMenus(api: WebExtApi): WebExtMenus | undefined {
   return api.menus ?? api.contextMenus;
 }
 
-/** Create the menus service over a resolved WebExtension API. */
-export function createMenusService(menus: WebExtMenus): MenusAdapter {
+/**
+ * Create the menus service. `resolve` is called per operation, so a namespace that
+ * appears later (the user granting the optional permission) is picked up without a
+ * restart.
+ */
+export function createMenusService(resolve: () => WebExtMenus | undefined): MenusAdapter {
   const clicks = createMultiplexer<[string]>((emit) => {
+    const menus = resolve();
+    if (menus === undefined) {
+      // Nothing to attach to yet; the caller re-subscribes once the feature is
+      // available, and an unsubscribe on this subscription is a no-op.
+      return () => undefined;
+    }
     const listener = (info: { menuItemId: string | number }): void => {
       emit(String(info.menuItemId));
     };
@@ -37,6 +49,17 @@ export function createMenusService(menus: WebExtMenus): MenusAdapter {
     };
   });
 
+  const require = (operation: string): WebExtMenus => {
+    const menus = resolve();
+    if (menus === undefined) {
+      throw new MenusError(`Menu ${operation} is unavailable`, {
+        code: 'menus-unavailable',
+        messageKey: 'error.capability.menus',
+      });
+    }
+    return menus;
+  };
+
   const fail = (operation: string, cause: unknown): MenusError =>
     new MenusError(`Menu ${operation} failed`, {
       code: `menus-${operation}-failed`,
@@ -45,25 +68,32 @@ export function createMenusService(menus: WebExtMenus): MenusAdapter {
     });
 
   return {
+    available(): boolean {
+      return resolve() !== undefined;
+    },
+
     create(spec: MenuItemSpec): Promise<void> {
       // Both engines take a completion callback; it is the only signal that the
       // entry actually landed, so the promise settles from it.
-      return new Promise<void>((resolve, reject) => {
+      return new Promise<void>((settle, reject) => {
         try {
-          menus.create({ id: spec.id, title: spec.title, contexts: [...spec.contexts] }, () => {
-            resolve();
-          });
+          require('create').create(
+            { id: spec.id, title: spec.title, contexts: [...spec.contexts] },
+            () => {
+              settle();
+            },
+          );
         } catch (cause) {
-          reject(fail('create', cause));
+          reject(cause instanceof MenusError ? cause : fail('create', cause));
         }
       });
     },
 
     async remove(id: string): Promise<void> {
       try {
-        await menus.remove(id);
+        await require('remove').remove(id);
       } catch (cause) {
-        throw fail('remove', cause);
+        throw cause instanceof MenusError ? cause : fail('remove', cause);
       }
     },
 
