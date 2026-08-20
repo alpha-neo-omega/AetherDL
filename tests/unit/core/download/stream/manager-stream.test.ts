@@ -254,6 +254,156 @@ describe('a stream job with assembly available', () => {
   });
 });
 
+describe('pausing a stream job (§10.2)', () => {
+  it('parks the job and stops the fetches instead of failing it', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const { manager, fake } = makeSystem(delivery.adapter);
+
+    const [task] = await manager.enqueue([streamItem()]);
+    await tick();
+    expect(manager.getTask(task!.id)?.state).toBe('preparing');
+
+    await manager.pause(task!.id);
+    await tick();
+
+    // The user asked to pause, so the job is paused — not failed, not stuck.
+    expect(manager.getTask(task!.id)?.state).toBe('paused');
+    expect(delivery.pending[0]?.request.signal?.aborted).toBe(true);
+    expect(fake.started).toEqual([]);
+  });
+
+  it('assembles again from the beginning when resumed', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const { manager, fake } = makeSystem(delivery.adapter);
+
+    const [task] = await manager.enqueue([streamItem()]);
+    await tick();
+    await manager.pause(task!.id);
+    await tick();
+    await manager.resume(task!.id);
+    await tick();
+
+    expect(manager.getTask(task!.id)?.state).toBe('preparing');
+    expect(delivery.requested).toEqual([MANIFEST, MANIFEST]);
+
+    delivery.settle();
+    await tick();
+    expect(fake.started).toHaveLength(1);
+  });
+
+  it('frees the slot it held, so another job can start', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const { manager, fake } = makeSystem(delivery.adapter);
+
+    const [stream] = await manager.enqueue([streamItem()]);
+    await tick();
+    await manager.pause(stream!.id);
+    await tick();
+
+    await manager.enqueue([mediaItem({ url: 'https://cdn.test/clip.mp4', id: 'clip' })]);
+    await tick();
+
+    expect(fake.started).toHaveLength(1);
+    expect(fake.started[0]?.url).toBe('https://cdn.test/clip.mp4');
+  });
+});
+
+describe('assembly is serialized (§12.1)', () => {
+  it('runs one assembly at a time, however many stream jobs are queued', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const { manager } = makeSystem(delivery.adapter);
+
+    await manager.enqueue([
+      streamItem('https://cdn.test/a.m3u8'),
+      streamItem('https://cdn.test/b.m3u8'),
+    ]);
+    await tick();
+
+    // Both jobs may hold a download slot, but only one is allowed to hold a stream
+    // in memory: 2 × the ceiling at once is how a worker dies.
+    expect(delivery.requested).toEqual(['https://cdn.test/a.m3u8']);
+
+    delivery.settle();
+    await tick();
+    await tick();
+
+    expect(delivery.requested).toEqual(['https://cdn.test/a.m3u8', 'https://cdn.test/b.m3u8']);
+  });
+});
+
+describe('progress patches while assembling', () => {
+  it('writes at most once per interval, and always on the last segment', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const fake = createFakeDownloads();
+    let now = 1000;
+    let counter = 0;
+    const manager = createDownloadSystem({
+      downloads: fake.adapter,
+      clock: () => now,
+      generateId: () => {
+        counter += 1;
+        return `job-${String(counter)}`;
+      },
+      streamDelivery: delivery.adapter,
+    });
+    const progressSpy = vi.fn();
+    manager.on('progress', progressSpy);
+
+    const [task] = await manager.enqueue([streamItem()]);
+    await tick();
+    const report = delivery.pending[0]?.request.onProgress;
+
+    // Four segments land inside the same 500 ms window; only the first and the final
+    // one are worth a queue write.
+    report?.({ segmentsDone: 1, segmentsTotal: 4, bytesReceived: 100 });
+    await tick();
+    now += 10;
+    report?.({ segmentsDone: 2, segmentsTotal: 4, bytesReceived: 200 });
+    await tick();
+    now += 10;
+    report?.({ segmentsDone: 3, segmentsTotal: 4, bytesReceived: 300 });
+    await tick();
+    now += 10;
+    report?.({ segmentsDone: 4, segmentsTotal: 4, bytesReceived: 400 });
+    await tick();
+
+    expect(progressSpy).toHaveBeenCalledTimes(2);
+    // The visible state still ends correct: the final report is never dropped.
+    expect(manager.getTask(task!.id)?.bytesReceived).toBe(400);
+    expect(manager.getTask(task!.id)?.progress).toBe(1);
+  });
+
+  it('writes again once the interval has passed', async () => {
+    const delivery = fakeDelivery({ auto: false });
+    const fake = createFakeDownloads();
+    let now = 1000;
+    let counter = 0;
+    const manager = createDownloadSystem({
+      downloads: fake.adapter,
+      clock: () => now,
+      generateId: () => {
+        counter += 1;
+        return `job-${String(counter)}`;
+      },
+      streamDelivery: delivery.adapter,
+    });
+    const progressSpy = vi.fn();
+    manager.on('progress', progressSpy);
+
+    await manager.enqueue([streamItem()]);
+    await tick();
+    const report = delivery.pending[0]?.request.onProgress;
+
+    report?.({ segmentsDone: 1, segmentsTotal: 100, bytesReceived: 10 });
+    await tick();
+    now += 600;
+    report?.({ segmentsDone: 2, segmentsTotal: 100, bytesReceived: 20 });
+    await tick();
+
+    expect(progressSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('a stream job without assembly', () => {
   it('is refused at enqueue, exactly as before, with no native start', async () => {
     const { manager, fake } = makeSystem();

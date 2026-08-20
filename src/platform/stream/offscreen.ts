@@ -20,7 +20,13 @@ import type {
   StreamDeliveryAdapter,
   StreamDeliveryRequest,
 } from '@platform/stream';
-import { RuntimeError } from '@shared/result/errors';
+import { DrmError, NetworkError, PlatformError, RuntimeError } from '@shared/result/errors';
+import {
+  isProtectedStreamCode,
+  isStreamErrorCode,
+  streamMessageKeyFor,
+  streamRetryableFor,
+} from '@shared/result/stream';
 import type { StreamProgressBroadcast } from '@shared/types';
 import { manifestTypeFromUrl } from '@shared/utils';
 
@@ -47,6 +53,22 @@ export interface OffscreenStreamDeliveryOptions {
   readonly api: WebExtApi;
   readonly messaging: MessageBus;
   readonly maxTotalBytes?: number;
+  /** Injected in tests; defaults to `crypto.randomUUID`. */
+  readonly generateId?: () => string;
+}
+
+/**
+ * Prefer the request id: two jobs may share a manifest URL — the same stream queued
+ * twice — and each must see only its own progress, and be abortable on its own.
+ */
+function matchesRequest(
+  payload: StreamProgressBroadcast,
+  manifestUrl: string,
+  requestId: string,
+): boolean {
+  return payload.requestId === undefined
+    ? payload.manifestUrl === manifestUrl
+    : payload.requestId === requestId;
 }
 
 function isProgress(payload: unknown): payload is StreamProgressBroadcast {
@@ -60,6 +82,27 @@ function isProgress(payload: unknown): payload is StreamProgressBroadcast {
     typeof record['segmentsTotal'] === 'number' &&
     typeof record['bytesReceived'] === 'number'
   );
+}
+
+/**
+ * Rebuild the refusal the host raised. A message carries only `{message, code}`, so
+ * the bus hands back a generic messaging error — which would show an encrypted stream
+ * to the user as "check your network". The code is enough to restore the class, the
+ * message key and the retryable flag (§20.5).
+ */
+function restoreHostError(cause: unknown): unknown {
+  if (!(cause instanceof PlatformError) || !isStreamErrorCode(cause.code)) {
+    return cause;
+  }
+  const options = {
+    code: cause.code,
+    messageKey: streamMessageKeyFor(cause.code),
+    retryable: streamRetryableFor(cause.code),
+    cause,
+  };
+  return isProtectedStreamCode(cause.code)
+    ? new DrmError(cause.message, { ...options, retryable: false })
+    : new NetworkError(cause.message, options);
 }
 
 export function createOffscreenStreamDelivery(
@@ -155,7 +198,23 @@ export function createOffscreenStreamDelivery(
       const manifest = manifestTypeFromUrl(url);
       return manifest === 'hls' || manifest === 'dash';
     },
+    async reset(): Promise<void> {
+      // A document opened by a previous worker generation outlives that worker and may
+      // still hold a stream-sized blob nothing tracks any more (§8.9, §12.1).
+      if (offscreen === undefined || live.size > 0) {
+        return;
+      }
+      try {
+        if (offscreen.hasDocument === undefined || (await offscreen.hasDocument())) {
+          await offscreen.closeDocument();
+        }
+      } catch {
+        // No document, or one that closed itself: nothing is held either way.
+      }
+    },
+
     async assemble(request: StreamDeliveryRequest): Promise<StreamDelivery> {
+      const requestId = (options.generateId ?? ((): string => crypto.randomUUID()))();
       await ensureDocument();
       try {
         await awaitHost();
@@ -170,7 +229,7 @@ export function createOffscreenStreamDelivery(
         request.onProgress === undefined
           ? undefined
           : options.messaging.onBroadcast(STREAM_PROGRESS_BROADCAST, (payload) => {
-              if (isProgress(payload) && payload.manifestUrl === request.manifestUrl) {
+              if (isProgress(payload) && matchesRequest(payload, request.manifestUrl, requestId)) {
                 request.onProgress?.({
                   segmentsDone: payload.segmentsDone,
                   segmentsTotal: payload.segmentsTotal,
@@ -184,7 +243,7 @@ export function createOffscreenStreamDelivery(
         void options.messaging
           .send(
             'stream/abort',
-            { manifestUrl: request.manifestUrl },
+            { manifestUrl: request.manifestUrl, requestId },
             { timeoutMs: RELEASE_TIMEOUT_MS },
           )
           .catch(() => undefined);
@@ -197,6 +256,7 @@ export function createOffscreenStreamDelivery(
           'stream/assemble',
           {
             manifestUrl: request.manifestUrl,
+            requestId,
             ...(ceiling !== undefined && { maxTotalBytes: ceiling }),
           },
           { timeoutMs: ASSEMBLE_TIMEOUT_MS },
@@ -228,6 +288,10 @@ export function createOffscreenStreamDelivery(
             await closeIfIdle();
           },
         };
+      } catch (cause) {
+        // The host's own refusal, restored: same code, same meaning, same wording as
+        // if assembly had run in this context.
+        throw restoreHostError(cause);
       } finally {
         request.signal?.removeEventListener('abort', onAbort);
         unsubscribe?.();

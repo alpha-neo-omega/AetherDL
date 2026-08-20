@@ -109,6 +109,61 @@ describe('DASH: SegmentTimeline', () => {
   });
 });
 
+describe('DASH: which AdaptationSet a representation came from', () => {
+  it('reports the set index and content type, so split tracks are detectable', () => {
+    const result = parseDashManifest(
+      mpd(`
+        <Period duration="PT8S">
+          <AdaptationSet mimeType="video/mp4" contentType="video">
+            <SegmentTemplate media="v-$Number$.m4s" duration="4" timescale="1"/>
+            <Representation id="v" bandwidth="2000000" width="1280" height="720"/>
+          </AdaptationSet>
+          <AdaptationSet mimeType="audio/mp4">
+            <SegmentTemplate media="a-$Number$.m4s" duration="4" timescale="1"/>
+            <Representation id="a" bandwidth="128000"/>
+          </AdaptationSet>
+        </Period>`),
+      BASE,
+    );
+
+    expect(result.kind).toBe('static');
+    if (result.kind !== 'static') {
+      return;
+    }
+    expect(
+      result.representations.map((entry) => ({
+        id: entry.id,
+        setIndex: entry.setIndex,
+        contentType: entry.contentType,
+      })),
+    ).toEqual([
+      { id: 'v', setIndex: 0, contentType: 'video' },
+      // No contentType attribute: the MIME type says the same thing.
+      { id: 'a', setIndex: 1, contentType: 'audio' },
+    ]);
+  });
+
+  it('keeps representations of one set together', () => {
+    const result = parseDashManifest(
+      mpd(`
+        <Period duration="PT4S">
+          <AdaptationSet mimeType="video/mp4">
+            <SegmentTemplate media="$RepresentationID$-$Number$.m4s" duration="4" timescale="1"/>
+            <Representation id="low" bandwidth="300000"/>
+            <Representation id="high" bandwidth="900000"/>
+          </AdaptationSet>
+        </Period>`),
+      BASE,
+    );
+
+    expect(result.kind).toBe('static');
+    if (result.kind !== 'static') {
+      return;
+    }
+    expect(result.representations.map((entry) => entry.setIndex)).toEqual([0, 0]);
+  });
+});
+
 describe('DASH: SegmentList and byte ranges', () => {
   it('takes the stated URLs and their media ranges', () => {
     const result = parseDashManifest(

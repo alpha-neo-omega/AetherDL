@@ -1,10 +1,11 @@
-# AetherDL 1.1.0 — Release Audit
+# AetherDL 1.2.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.1.0` build, which adds non-DRM HLS/DASH downloading. Store submission requires
+> against the `1.2.0` build: the 1.1.0 stream feature set plus a thirteen-defect fix sweep,
+> three of which produced silently wrong results. Store submission requires
 > Owner-held credentials and is a gated manual step (§18.8); distribution is via official stores
 > only (§18.6, non-goal N17).
 >
@@ -19,21 +20,21 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.1.0` — feature release adding non-DRM HLS/DASH downloads and a wider container set, directed by the Project Owner on 2026-08-20 |
+| Version | `1.2.0` — the 1.1.0 stream feature set (ADR-010) plus the defect sweep recorded in `CHANGELOG.md`, including refusal of streams whose audio is a separate track, enforcement of byte-range responses, and visible failure reasons |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.1.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 964 unit/integration tests, 68 performance assertions, both builds, manifest validation, the security gate, packaging, and 49 browser e2e cases — **exit 0**. Nothing in this file is carried over from the 1.0.0 run |
+| Executed at 1.2.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1013 unit/integration tests, 68 performance assertions, both builds, manifest validation, the security gate, packaging, and 50 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.1.0-chrome.zip` | 122 241 | 20 | `ff997305c3acb5d318c2ea95c7b56d52440426b49d6b3015f88511b24a938285` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.1.0-firefox.zip` | 122 307 | 20 | `f52a6ccc89c6e9937ac1c127af0707476accfa7b666a34f6021e64118c130fff` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.2.0-chrome.zip` | 124 878 | 20 | `3f8aba4a0392ab26b0b096df54110df76651249ac52cabd8c78bccf2be9fdafa` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.2.0-firefox.zip` | 124 944 | 20 | `9134f08c8d5d63d1eaf88a3ed8a8d90ded6964c09e213e60053a407e3f439106` | Firefox Add-ons (AMO) |
 
-Both archives grew by four entries: the assembly document (`offscreen.html`, `offscreen.js`) and the
-two chunks the stream code lives in.
+Both archives carry four entries more than `1.0.0` did: the assembly document
+(`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
 
 Checksums are written by the packaging script to `dist/release/SHA256SUMS.txt`. Archives are
 deterministic for a given Node (and therefore zlib) version: entries are sorted and stamped with a
@@ -90,6 +91,13 @@ feature reports itself unavailable there and degrades gracefully (§7.2, §7.4, 
 `tests/regression/firefox-menus.test.tsx` and by the installed-extension Firefox e2e.
 
 ### DRM boundary (§6)
+
+`1.2.0` closed a defect in how a refusal was *described*: an encrypted stream reached the user with
+network copy ("check your network"), and on Chromium the reason was lost entirely crossing the
+offscreen boundary, where a runtime message carries only `{message, code}`. Protected content is now
+its own error category (`drm`), never retried, with its own wording, and the client rebuilds the
+typed error from the code — asserted in a real browser
+(`tests/e2e/stream-chromium.spec.ts`).
 
 Encrypted media is classified unsupported and refused before any transfer starts. Observed in both
 engines during this audit — the matrix runner's own lines, abridged to the fields that carry the
@@ -221,11 +229,11 @@ literal value is absent from the governance documents and was ratified by the Pr
 ### Bundle budgets (§12.1), measured on this build
 
 ```
-background   31.2kB gz / 150.0kB budget (5 files,  95.6kB raw)
+background   32.4kB gz / 150.0kB budget (5 files,  99.2kB raw)
 content       3.0kB gz /  40.0kB budget (1 file,    7.6kB raw)
-popup        78.0kB gz / 200.0kB budget (6 files, 249.5kB raw)
-settings     78.6kB gz / 200.0kB budget (5 files, 255.4kB raw)
-offscreen    10.1kB gz /  40.0kB budget (3 files,  27.2kB raw)
+popup        78.5kB gz / 200.0kB budget (6 files, 251.3kB raw)
+settings     79.3kB gz / 200.0kB budget (5 files, 258.3kB raw)
+offscreen    10.8kB gz /  40.0kB budget (3 files,  29.6kB raw)
 ```
 
 The background surface carries the stream code (parsers, assembly, HTTP client) and grew from
@@ -235,11 +243,21 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 964 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1013 unit +
 integration + accessibility + regression tests, 68 performance tests, both builds, both manifest
-validations, the security gate, packaging, and 49 browser e2e tests (Chromium and Firefox, including
+validations, the security gate, packaging, and 50 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 97.63 % statements, 94.21 % branches.
+`npm run test:coverage` (which `ci` does not run): 97.62 % statements, 94.27 % branches.
+
+The `1.2.0` sweep added 49 tests, one per fixed defect and its edges, including two browser cases: a
+real Chromium refusal of a stream whose audio is a separate rendition, and the DRM category and
+wording surviving the offscreen boundary.
+
+One note on measuring performance here: the first `ci` run of this build reported the popup's
+per-update commit at 20.1 ms against a 16 ms frame budget while the operator's desktop sat at load
+7.3. Re-measured twice on an idle machine it was **3.2 ms and 3.3 ms**, and popup TTI 31.4 ms and
+30.7 ms against 150 ms. No budget was relaxed; the failing figure was contention, and it is recorded
+here rather than quietly dropped.
 
 The 129 tests added for this release cover: the HLS parser including every encryption form and the
 assertion that no key material appears in a refusal (16); the DASH parser including
@@ -270,6 +288,10 @@ Honest limits of this audit:
   file or environment variable exists in this repository.
 - **Icons are placeholders.** `build/scripts/gen-icons.ts` generates solid-colour placeholders; the
   128×128 file is 360 bytes. A listing needs the real icon set (see `docs/STORE_LISTING.md` §7).
+- **Streams whose audio is a separate track are refused, not downloaded.** Most real-world DASH and
+  much HLS is packaged that way, so a large share of streams in the wild are out of reach in this
+  build. The alternative — saving a video with no sound — was the 1.1.0 behaviour and is worse;
+  muxing is out of scope (`CHANGELOG.md` 1.2.0).
 - **Stream assembly has not been tried against a live streaming site.** Its browser evidence is the
   loopback HLS fixture in `tests/e2e/stream-chromium.spec.ts`. Real sites vary in ways a fixture
   cannot reproduce: signed segment URLs that expire, redirect chains, per-request tokens, CORS

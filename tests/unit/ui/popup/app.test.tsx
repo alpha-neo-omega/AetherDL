@@ -682,3 +682,92 @@ describe('ui/popup PopupApp — host access for stream downloads (§13.7, §4.15
     view.unmount();
   });
 });
+
+describe('ui/popup PopupApp — why a job failed (§20.5)', () => {
+  it('shows the reason on a failed job, not just the word "Failed"', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'a', title: 'Clip' })]);
+    fake.setTasks([
+      downloadTask({
+        id: 'task-1',
+        item: mediaItem({ id: 'a', title: 'Clip' }),
+        state: 'failed',
+        error: {
+          category: 'drm',
+          code: 'stream-hls-encrypted',
+          messageKey: 'error.drm',
+          retryable: false,
+        },
+      }),
+    ]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+
+    expect(texts(view.container, '.adl-queue__item-reason')).toEqual([
+      'This media is protected and cannot be downloaded.',
+    ]);
+    view.unmount();
+  });
+
+  it('uses the wording that belongs to the failure, not the category default', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setTasks([
+      downloadTask({
+        id: 'task-live',
+        item: mediaItem({ id: 'live', title: 'Live' }),
+        state: 'failed',
+        error: {
+          // A live stream is not a connection problem, and must not read like one.
+          category: 'network',
+          code: 'stream-hls-live',
+          messageKey: 'error.download.stream.live',
+          retryable: false,
+        },
+      }),
+    ]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+
+    expect(texts(view.container, '.adl-queue__item-reason')).toEqual([
+      'This is a live stream. A live stream has no end, so there is nothing to save.',
+    ]);
+    view.unmount();
+  });
+
+  it('shows no reason line for a job that has not failed', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setTasks([downloadTask({ id: 'task-2', item: mediaItem({ id: 'b' }), state: 'active' })]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+
+    expect(texts(view.container, '.adl-queue__item-reason')).toEqual([]);
+    view.unmount();
+  });
+});
+
+describe('ui/popup PopupApp — delivery is named in words (§19.1)', () => {
+  it('reads out the delivery type instead of printing the raw enum', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([
+      mediaItem({
+        id: 'stream',
+        title: 'Live Show',
+        kind: 'stream',
+        url: 'https://cdn.test/hls/master.m3u8',
+        delivery: 'hls',
+      }),
+    ]);
+    const view = await mount(fake);
+
+    const card = view.container.querySelector('.adl-card__facts');
+    expect(card?.textContent).toContain('HLS stream');
+    expect(card?.textContent).not.toContain('hls');
+    view.unmount();
+  });
+});

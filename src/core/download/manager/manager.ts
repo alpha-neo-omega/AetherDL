@@ -59,6 +59,21 @@ export interface DownloadManagerDeps {
   readonly scheduleTimer?: (delayMs: number, callback: () => void) => CancelTimer;
 }
 
+/**
+ * One assembly at a time. Each holds a whole stream in memory, so running the
+ * concurrency limit's worth of them in parallel would multiply the peak by that limit
+ * (§12.1). Streams therefore queue behind each other even when download slots are
+ * free; progressive downloads are unaffected because they never assemble.
+ */
+const MAX_CONCURRENT_ASSEMBLIES = 1;
+
+/**
+ * Persisting a progress patch rewrites the queue (§8.14), and assembly reports once
+ * per segment — thousands of times for a long stream. Patches are therefore throttled
+ * to this interval; the final segment always lands, so the visible state ends correct.
+ */
+const STREAM_PROGRESS_INTERVAL_MS = 500;
+
 const SCHEDULABLE: ReadonlySet<TaskState> = new Set<TaskState>([
   'queued',
   'preparing',
@@ -86,8 +101,14 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
   const retryTimers = new Map<string, CancelTimer>();
   // Stream jobs only: the assembly in flight (so a cancel can stop the fetches) and
   // the delivered URL (so its bytes are always freed, on every exit path).
-  const assemblies = new Map<string, AbortController>();
+  // Per assembling job: how to stop it, and how to hand its assembly slot back. The
+  // slot is released on abort as well as on completion — an adapter that never settles
+  // after being aborted must not hold the next stream hostage.
+  const assemblies = new Map<string, { controller: AbortController; releaseSlot: () => void }>();
   const deliveries = new Map<string, StreamDelivery>();
+  // Serializes assemblies: each waiter runs when the one before it settles.
+  let assemblyGate: Promise<void> = Promise.resolve();
+  let assembliesRunning = 0;
   let queuePaused = false;
   let disposed = false;
   let hadPending = false;
@@ -149,10 +170,11 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
 
   /** Stop an assembly still fetching segments (cancel, remove, shutdown). */
   const abortAssembly = (jobId: string): void => {
-    const controller = assemblies.get(jobId);
-    if (controller !== undefined) {
+    const entry = assemblies.get(jobId);
+    if (entry !== undefined) {
       assemblies.delete(jobId);
-      controller.abort();
+      entry.controller.abort();
+      entry.releaseSlot();
     }
   };
 
@@ -190,10 +212,23 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     return names;
   };
 
+  /**
+   * The container that was actually written. For a stream the detected item says
+   * `m3u8`/`mpd` while the saved file is `.ts` or `.mp4`, so the filename — the thing
+   * on disk — is the truthful source, with the item's own container as the fallback.
+   */
+  const savedContainer = (task: DownloadTask): string | undefined => {
+    const name = task.filename;
+    const dot = name.lastIndexOf('.');
+    const fromName = dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : '';
+    return fromName !== '' ? fromName : task.item.container;
+  };
+
   const recordHistory = (task: DownloadTask, outcome: 'completed' | 'failed'): void => {
     if (deps.history === undefined) {
       return;
     }
+    const container = savedContainer(task);
     const record: HistoryRecord = {
       id: task.id,
       title: task.item.title,
@@ -202,7 +237,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       timestamp: clock(),
       outcome,
       filename: task.filename,
-      ...(task.item.container !== undefined && { container: task.item.container }),
+      ...(container !== undefined && { container }),
       ...(task.bytesTotal !== undefined && { sizeBytes: task.bytesTotal }),
     };
     void deps.history.record(record).catch((cause: unknown) => {
@@ -395,6 +430,30 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
    * it goes. Throws on refusal (encryption above all) or failure; the caller's catch
    * turns that into the normal failure path (§10.6, §6).
    */
+  /** Wait for a free assembly slot, keeping the queue's order (§10.6, §12.1). */
+  const acquireAssemblySlot = async (): Promise<() => void> => {
+    while (assembliesRunning >= MAX_CONCURRENT_ASSEMBLIES) {
+      await assemblyGate;
+    }
+    assembliesRunning += 1;
+    let release = (): void => undefined;
+    assemblyGate = new Promise<void>((resolve) => {
+      release = (): void => {
+        resolve();
+      };
+    });
+    // Idempotent: abort and completion may both reach for it.
+    let handed = false;
+    return () => {
+      if (handed) {
+        return;
+      }
+      handed = true;
+      assembliesRunning -= 1;
+      release();
+    };
+  };
+
   const assembleStreamFor = async (job: DownloadTask): Promise<StreamDelivery> => {
     const adapter = deps.streamDelivery;
     if (adapter === undefined) {
@@ -404,7 +463,9 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       });
     }
     const controller = new AbortController();
-    assemblies.set(job.id, controller);
+    let lastPatchAt = 0;
+    const releaseAssemblySlot = await acquireAssemblySlot();
+    assemblies.set(job.id, { controller, releaseSlot: releaseAssemblySlot });
     try {
       const delivery = await adapter.assemble({
         manifestUrl: job.item.url,
@@ -416,6 +477,14 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
           if (live === undefined || live.state !== 'preparing') {
             return;
           }
+          // Throttled: one write per interval, plus the last segment unconditionally,
+          // so a 20 000-segment stream does not rewrite the queue 20 000 times.
+          const now = clock();
+          const isLast = progressReport.segmentsDone >= progressReport.segmentsTotal;
+          if (!isLast && lastPatchAt !== 0 && now - lastPatchAt < STREAM_PROGRESS_INTERVAL_MS) {
+            return;
+          }
+          lastPatchAt = now;
           const ratio =
             progressReport.segmentsTotal > 0
               ? progressReport.segmentsDone / progressReport.segmentsTotal
@@ -437,6 +506,7 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       return delivery;
     } finally {
       assemblies.delete(job.id);
+      releaseAssemblySlot();
     }
   };
 
@@ -683,11 +753,25 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       if (job === undefined) {
         return;
       }
-      // A job still assembling has no native transfer to park; stopping the fetches
-      // and dropping the partial bytes is the honest equivalent, and a resume starts
-      // the assembly again (§10.2).
-      if (job.state === 'preparing') {
+      // A job still assembling has no native transfer to park, and `preparing` cannot
+      // go straight to `paused` (§10.2). Route it the same way an active job is
+      // paused — through `canceling` — stopping the fetches and dropping the partial
+      // bytes; a resume starts the assembly again from the beginning.
+      if (job.state === 'preparing' && assemblies.has(taskId)) {
+        const canceling = await transition(job, 'canceling');
         abortAssembly(taskId);
+        releaseDelivery(taskId);
+        finishSlot(taskId);
+        // Re-read AFTER the transition: a concurrent cancel/remove may own the job by
+        // now, and parking it would resurrect what the user just discarded.
+        const settled = queue.getById(taskId);
+        if (settled !== undefined && settled.state === 'canceling') {
+          await transition(settled, 'paused');
+        } else {
+          void canceling;
+        }
+        pump();
+        return;
       }
       if (job.state === 'queued') {
         await transition(job, 'paused');
@@ -805,8 +889,9 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
     async dispose(): Promise<void> {
       disposed = true;
       unsubDownloads();
-      for (const controller of assemblies.values()) {
-        controller.abort();
+      for (const entry of assemblies.values()) {
+        entry.controller.abort();
+        entry.releaseSlot();
       }
       assemblies.clear();
       for (const jobId of [...deliveries.keys()]) {

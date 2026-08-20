@@ -1,6 +1,6 @@
 {
   "name": "aetherdl",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "AetherDL \u2014 Fast. Private. Powerful. A modern cross-browser media downloader.",
   "type": "module",

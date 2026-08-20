@@ -185,6 +185,18 @@ export function createHttpClient(deps: HttpClientDeps = {}): HttpClient {
         });
       }
 
+      // A server may answer a `Range` request with 200 and the whole resource. The
+      // caller asked for a slice; handing back the file instead would corrupt whatever
+      // it is assembling, so the response is refused as the wrong answer (§10.6).
+      if (options?.range !== undefined && response.status !== 206) {
+        throw new HttpError(`Range request answered ${String(response.status)} instead of 206`, {
+          code: 'http-range-ignored',
+          messageKey: 'error.network',
+          retryable: false,
+          context: { url, status: response.status },
+        });
+      }
+
       const bytes = await readBounded(response, maxBytes, url);
       return {
         status: response.status,

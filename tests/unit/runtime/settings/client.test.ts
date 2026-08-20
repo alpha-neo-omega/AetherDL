@@ -167,3 +167,31 @@ describe('runtime/settings client adapter', () => {
     expect(seen).toHaveLength(1);
   });
 });
+
+describe('runtime/settings client — site access (§4.15)', () => {
+  it('reports the origins the browser says are granted, in a stable order', async () => {
+    const { fake, client } = setup();
+    fake.grantedOrigins.add('https://media.example/*');
+    fake.grantedOrigins.add('https://cdn.test/*');
+
+    expect(await client.listSiteAccess()).toEqual([
+      'https://cdn.test/*',
+      'https://media.example/*',
+    ]);
+  });
+
+  it('reports nothing when nothing is granted', async () => {
+    const { client } = setup();
+
+    expect(await client.listSiteAccess()).toEqual([]);
+  });
+
+  it('withdraws exactly the origin it was given', async () => {
+    const { fake, client } = setup();
+    fake.grantedOrigins.add('https://cdn.test/*');
+    fake.grantedOrigins.add('https://media.example/*');
+
+    expect(await client.revokeSiteAccess('https://cdn.test/*')).toBe(true);
+    expect([...fake.grantedOrigins]).toEqual(['https://media.example/*']);
+  });
+});

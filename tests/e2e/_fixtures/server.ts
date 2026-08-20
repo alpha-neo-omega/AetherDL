@@ -110,6 +110,23 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
       response.end(Buffer.alloc(HLS_SEGMENT_BYTES, index));
       return;
     }
+    // A master playlist whose audio is a separate rendition: assembling the video
+    // variant alone would produce silent video, so it must be refused (§10.6).
+    if (requested === '/media/hls/split-audio.m3u8') {
+      const body = [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="aac"',
+        'index.m3u8',
+        '',
+      ].join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
     // An encrypted playlist, which must be refused rather than downloaded (§6).
     if (requested === '/media/hls/encrypted.m3u8') {
       const body = [

@@ -124,6 +124,17 @@ function PopupSurface(props: {
         codec: t('card.field.codec'),
         delivery: t('card.field.delivery'),
       },
+      delivery: {
+        progressive: t('card.delivery.progressive'),
+        direct: t('card.delivery.direct'),
+        html5: t('card.delivery.html5'),
+        hls: t('card.delivery.hls'),
+        dash: t('card.delivery.dash'),
+        blob: t('card.delivery.blob'),
+        // The catalogue name may only contain word characters, so the key spells the
+        // delivery type in camel case while the map is still keyed by its real value.
+        'media-source': t('card.delivery.mediaSource'),
+      },
       taskState: taskStateLabels(t),
     }),
     [t],
@@ -146,6 +157,8 @@ function PopupSurface(props: {
       remove: t('queue.remove'),
       progressLabel: t('card.progress'),
       taskState: taskStateLabels(t),
+      // The reason a job failed, in the user's own language, from the job's own error.
+      describeFailure: (error) => describeError(error, t).detail,
     }),
     [t],
   );

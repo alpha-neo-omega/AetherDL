@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebExtApi } from '@platform/browser/webext';
 import type { MessageBus } from '@platform/messaging';
+import { MessagingError } from '@shared/result/errors';
 import {
   createOffscreenStreamDelivery,
   OFFSCREEN_DOCUMENT_PATH,
@@ -121,7 +122,11 @@ function harness(options: { hasOffscreen?: boolean } = {}): Harness {
 describe('offscreen stream delivery', () => {
   it('opens the document, assembles, and reports what came back', async () => {
     const h = harness();
-    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+    const delivery = createOffscreenStreamDelivery({
+      api: h.api,
+      messaging: h.messaging,
+      generateId: () => 'req-fixed',
+    });
 
     const result = await delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' });
 
@@ -129,7 +134,7 @@ describe('offscreen stream delivery', () => {
     expect(h.offscreen.created).toBe(1);
     expect(h.sent[0]).toEqual({
       type: 'stream/assemble',
-      payload: { manifestUrl: 'https://cdn.test/a.m3u8' },
+      payload: { manifestUrl: 'https://cdn.test/a.m3u8', requestId: 'req-fixed' },
     });
     expect(result).toMatchObject(RESULT);
     // Bytes are still held, so the document must stay open.
@@ -159,11 +164,23 @@ describe('offscreen stream delivery', () => {
     expect(h.sent.filter((message) => message.type === 'stream/release')).toHaveLength(1);
   });
 
-  it('relays only the progress belonging to this manifest', async () => {
+  it('relays only the progress belonging to this request', async () => {
     const h = harness();
     const onProgress = vi.fn();
-    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+    const delivery = createOffscreenStreamDelivery({
+      api: h.api,
+      messaging: h.messaging,
+      generateId: () => 'req-a',
+    });
     h.onAssemble(() => {
+      // Another job, same manifest URL: keyed by id, this must not be relayed.
+      h.emitProgress({
+        manifestUrl: 'https://cdn.test/a.m3u8',
+        requestId: 'req-b',
+        segmentsDone: 7,
+        segmentsTotal: 9,
+        bytesReceived: 77,
+      });
       h.emitProgress({
         manifestUrl: 'https://other.test/b.m3u8',
         segmentsDone: 9,
@@ -186,17 +203,46 @@ describe('offscreen stream delivery', () => {
     ]);
   });
 
-  it('tells the host to abort when the caller aborts', async () => {
+  it('tells the host to abort exactly this request', async () => {
     const h = harness();
     const controller = new AbortController();
-    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+    const delivery = createOffscreenStreamDelivery({
+      api: h.api,
+      messaging: h.messaging,
+      generateId: () => 'req-abort',
+    });
     h.onAssemble(() => {
       controller.abort();
     });
 
     await delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8', signal: controller.signal });
 
-    expect(h.sent.map((message) => message.type)).toContain('stream/abort');
+    const abort = h.sent.find((message) => message.type === 'stream/abort');
+    expect(abort?.payload).toEqual({
+      manifestUrl: 'https://cdn.test/a.m3u8',
+      requestId: 'req-abort',
+    });
+  });
+
+  it('closes a document a previous worker generation left behind', async () => {
+    const h = harness();
+    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+
+    await delivery.reset?.();
+
+    // Nothing is tracked after a restart, so the stale document — and the blob it
+    // holds — is dropped rather than left resident.
+    expect(h.offscreen.closed).toBe(1);
+  });
+
+  it('does not reset while a delivery of this session still holds bytes', async () => {
+    const h = harness();
+    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+
+    await delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' });
+    await delivery.reset?.();
+
+    expect(h.offscreen.closed).toBe(0);
   });
 
   it('closes the document again when assembly failed, holding nothing', async () => {
@@ -251,6 +297,56 @@ describe('offscreen stream delivery', () => {
       delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' }),
     ).rejects.toMatchObject({ code: 'stream-offscreen-open-failed' });
     expect(h.sent).toEqual([]);
+  });
+
+  it('restores the host refusal, so an encrypted stream is not reported as a network fault', async () => {
+    const h = harness();
+    // What the bus hands back: the code survives, the meaning does not.
+    h.failAssemble(
+      new MessagingError('Playlist is encrypted (METHOD=AES-128)', {
+        code: 'stream-hls-encrypted',
+        messageKey: 'error.messaging.handler',
+      }),
+    );
+    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+
+    await expect(
+      delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' }),
+    ).rejects.toMatchObject({
+      category: 'drm',
+      code: 'stream-hls-encrypted',
+      messageKey: 'error.drm',
+      retryable: false,
+    });
+  });
+
+  it('restores a transport failure as retryable', async () => {
+    const h = harness();
+    h.failAssemble(
+      new MessagingError('Segment 2 of 9 failed (http-network-failed)', {
+        code: 'stream-segment-failed',
+        messageKey: 'error.messaging.handler',
+      }),
+    );
+    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+
+    await expect(
+      delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' }),
+    ).rejects.toMatchObject({ category: 'network', messageKey: 'error.network', retryable: true });
+  });
+
+  it('leaves an error that is not a stream refusal exactly as it was', async () => {
+    const h = harness();
+    const original = new MessagingError('No valid response', {
+      code: 'messaging-no-response',
+      messageKey: 'error.messaging.noResponse',
+    });
+    h.failAssemble(original);
+    const delivery = createOffscreenStreamDelivery({ api: h.api, messaging: h.messaging });
+
+    await expect(delivery.assemble({ manifestUrl: 'https://cdn.test/a.m3u8' })).rejects.toBe(
+      original,
+    );
   });
 
   it('is unsupported where the engine has no offscreen API at all', async () => {

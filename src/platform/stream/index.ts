@@ -43,4 +43,12 @@ export interface StreamDeliveryAdapter {
   /** Whether the URL names a manifest this adapter would attempt. */
   handles(url: string): boolean;
   assemble(request: StreamDeliveryRequest): Promise<StreamDelivery>;
+  /**
+   * Discard anything an earlier session left behind — implemented where a
+   * session CAN leave something behind. A Chromium offscreen document outlives the
+   * service worker that opened it, so after a worker restart a document may still be
+   * holding a stream-sized blob that nothing tracks any more; the composition root
+   * calls this once at start-up to drop it (§8.9, §12.1).
+   */
+  reset?(): Promise<void>;
 }

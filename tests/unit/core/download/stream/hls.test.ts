@@ -26,7 +26,7 @@ describe('HLS: master playlists', () => {
     if (result.kind !== 'master') {
       return;
     }
-    expect(result.variants).toEqual([
+    expect([...result.variants]).toEqual([
       {
         url: 'https://cdn.test/hls/360/index.m3u8',
         bandwidth: 800000,
@@ -37,6 +37,62 @@ describe('HLS: master playlists', () => {
       { url: 'https://cdn.test/abs/720/index.m3u8', bandwidth: 2400000, width: 1280, height: 720 },
       { url: 'https://other.test/1080.m3u8', bandwidth: 6000000, width: 1920, height: 1080 },
     ]);
+  });
+});
+
+describe('HLS: separate audio renditions', () => {
+  it('records an AUDIO group whose renditions have their own URI', () => {
+    const text = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="aac"',
+      'video/720.m3u8',
+    ].join('\n');
+
+    const result = parseHlsPlaylist(text, BASE);
+
+    expect(result.kind).toBe('master');
+    if (result.kind !== 'master') {
+      return;
+    }
+    // The variant carries video only; the caller refuses rather than saving silence.
+    expect(result.separateAudioGroups).toEqual(['aac']);
+    expect(result.variants[0]?.audioGroup).toBe('aac');
+  });
+
+  it('does not flag an AUDIO rendition that is muxed into the variants', () => {
+    const text = [
+      '#EXTM3U',
+      // No URI: the audio is inside each variant already.
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES',
+      '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aac"',
+      'v.m3u8',
+    ].join('\n');
+
+    const result = parseHlsPlaylist(text, BASE);
+
+    expect(result.kind).toBe('master');
+    if (result.kind !== 'master') {
+      return;
+    }
+    expect(result.separateAudioGroups).toEqual([]);
+  });
+
+  it('ignores subtitle and closed-caption renditions entirely', () => {
+    const text = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",URI="subs/en.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=800000,SUBTITLES="subs"',
+      'v.m3u8',
+    ].join('\n');
+
+    const result = parseHlsPlaylist(text, BASE);
+
+    expect(result.kind).toBe('master');
+    if (result.kind !== 'master') {
+      return;
+    }
+    expect(result.separateAudioGroups).toEqual([]);
   });
 });
 
@@ -187,6 +243,12 @@ describe('HLS: encryption is refused, and key material never surfaces', () => {
 });
 
 describe('HLS: refusals and bounds', () => {
+  it('accepts a playlist that opens with a blank line', () => {
+    const result = parseHlsPlaylist('\n\n#EXTM3U\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST', BASE);
+
+    expect(result.kind).toBe('media');
+  });
+
   it('refuses input that is not a playlist', () => {
     expect(parseHlsPlaylist('<html>nope</html>', BASE)).toMatchObject({
       kind: 'refused',

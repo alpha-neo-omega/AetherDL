@@ -16,8 +16,9 @@
  *          detectStreamKind, streamOriginsFor, assembleStream.
  */
 import { err, ok, type Result } from '@shared/result';
+import { isProtectedStreamCode, streamMessageKeyFor } from '@shared/result/stream';
 import { PlatformError } from '@shared/result/errors';
-import { StreamAssemblyError } from '@core/download/errors';
+import { StreamAssemblyError, StreamProtectedError } from '@core/download/errors';
 import { manifestTypeFromUrl } from '@shared/utils';
 import type { HttpClient } from '@platform/http';
 import {
@@ -95,12 +96,18 @@ export function streamOriginsFor(manifestUrl: string): readonly string[] {
   return origin === undefined ? [] : [origin];
 }
 
+/**
+ * A refusal is only useful if the surface can say WHY, so the code decides both the
+ * class and the message key. The mapping lives in `shared` because the Chromium
+ * client rebuilds these errors from the wire, where only the code survives (§20.5).
+ */
 function fail(message: string, code: string, retryable = false): StreamAssemblyError {
-  return new StreamAssemblyError(message, {
-    code,
-    messageKey: 'error.download.stream',
-    retryable,
-  });
+  const options = { code, messageKey: streamMessageKeyFor(code), retryable };
+  // Encryption is not a network condition and must never be retried; it gets its own
+  // class so every consumer classifies it as protected media (§6).
+  return isProtectedStreamCode(code)
+    ? (new StreamProtectedError(message, { ...options, retryable: false }) as StreamAssemblyError)
+    : new StreamAssemblyError(message, options);
 }
 
 /** Extension implied by a segment URL: fragmented MP4 or MPEG-TS. */
@@ -170,6 +177,21 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
       if (best === undefined) {
         return err(fail('Master playlist lists no usable variant', 'stream-hls-no-variant'));
       }
+      // A variant whose audio lives in its own rendition carries video only. Joining
+      // the two tracks is muxing, which this project does not do, so the stream is
+      // refused rather than saved as a video with no sound (§10.6).
+      const audioIsSeparate =
+        best.audioGroup !== undefined
+          ? playlist.separateAudioGroups.includes(best.audioGroup)
+          : playlist.separateAudioGroups.length > 0;
+      if (audioIsSeparate) {
+        return err(
+          fail(
+            'This stream keeps its audio in a separate track, which cannot be joined into one file',
+            'stream-hls-separate-audio',
+          ),
+        );
+      }
       url = best.url;
       continue;
     }
@@ -207,6 +229,30 @@ async function planDash(request: AssembleRequest): Promise<Result<FetchPlan, Str
     manifest.representations[manifest.defaultIndex];
   if (representation === undefined) {
     return err(fail('Manifest lists no usable representation', 'stream-dash-no-representation'));
+  }
+  // Video in one AdaptationSet and audio in another means no single representation
+  // holds both, so assembling one of them yields silent video (or audio with no
+  // picture). Refuse and say so, rather than hand over a file that looks right (§10.6).
+  const kinds = new Set(
+    manifest.representations.map((entry) => entry.contentType).filter((type) => type !== undefined),
+  );
+  const setsOfChosenKind = new Set(
+    manifest.representations
+      .filter((entry) => entry.contentType === representation.contentType)
+      .map((entry) => entry.setIndex),
+  );
+  const otherSets = new Set(
+    manifest.representations
+      .filter((entry) => !setsOfChosenKind.has(entry.setIndex))
+      .map((entry) => entry.setIndex),
+  );
+  if (kinds.has('video') && kinds.has('audio') && otherSets.size > 0) {
+    return err(
+      fail(
+        'This stream keeps its audio and video in separate tracks, which cannot be joined into one file',
+        'stream-dash-separate-audio',
+      ),
+    );
   }
   const segments: DashSegment[] = [
     ...(representation.initSegment !== undefined ? [representation.initSegment] : []),
@@ -267,6 +313,26 @@ export async function assembleStream(
       });
       received = response.bytes;
       finalUrl = response.url;
+      if (segment.range !== undefined) {
+        // A server that ignores `Range` answers 200 with the WHOLE resource. Appending
+        // that would silently corrupt the output, so the mismatch is a failure.
+        if (response.status !== 206) {
+          return err(
+            fail(
+              `Segment ${String(index + 1)} was answered without the byte range it asked for`,
+              'stream-range-ignored',
+            ),
+          );
+        }
+        if (received.byteLength !== segment.range.length) {
+          return err(
+            fail(
+              `Segment ${String(index + 1)} returned ${String(received.byteLength)} bytes for a ${String(segment.range.length)}-byte range`,
+              'stream-range-mismatch',
+            ),
+          );
+        }
+      }
     } catch (cause) {
       const { code, retryable } = describeHttpFailure(cause);
       return err(

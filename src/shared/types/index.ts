@@ -288,6 +288,12 @@ export interface StreamAssembleRequest {
   readonly manifestUrl: string;
   /** Optional ceiling; the assembler's own limit applies when omitted. */
   readonly maxTotalBytes?: number;
+  /**
+   * Identifies this assembly, so an abort stops the one it means. Two jobs can share
+   * a manifest URL — the same stream downloaded twice — and keying on the URL alone
+   * would let one cancel the other. Omitted, the host falls back to the URL.
+   */
+  readonly requestId?: string;
 }
 
 /** What the assembly host answers with. Encrypted manifests never get this far. */
@@ -305,6 +311,8 @@ export interface StreamAssembleResult {
 /** Broadcast while an assembly runs, so the queue can show real progress (§10.5). */
 export interface StreamProgressBroadcast {
   readonly manifestUrl: string;
+  /** Present when the caller identified its request; matched in preference to the URL. */
+  readonly requestId?: string;
   readonly segmentsDone: number;
   readonly segmentsTotal: number;
   readonly bytesReceived: number;
@@ -372,8 +380,11 @@ export interface MessageMap {
    * answers rather than sending work into a context with no listener yet.
    */
   readonly 'stream/ready': MessageExchange<void, boolean>;
-  /** Cancel an in-flight assembly for a manifest URL (§10.10). */
-  readonly 'stream/abort': MessageExchange<{ readonly manifestUrl: string }, void>;
+  /** Cancel one in-flight assembly, by request id where the caller sent one (§10.10). */
+  readonly 'stream/abort': MessageExchange<
+    { readonly manifestUrl: string; readonly requestId?: string },
+    void
+  >;
   /** Revoke a previously returned assembly URL and drop its bytes (§8.9). */
   readonly 'stream/release': MessageExchange<{ readonly url: string }, void>;
 }

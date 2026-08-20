@@ -52,6 +52,14 @@ export interface SettingsRuntimeClient {
   requestPermission(permission: OptionalPermission): Promise<boolean>;
   /** Give an optional permission back (§4.15). */
   removePermission(permission: OptionalPermission): Promise<boolean>;
+  /**
+   * The site origins the user has granted (§4.15). Stream downloads ask for these at
+   * point of use, so they are the most consequential grants AetherDL holds — and a
+   * grant the user cannot see is a grant the user cannot withdraw.
+   */
+  listSiteAccess(): Promise<readonly string[]>;
+  /** Withdraw one granted origin. */
+  revokeSiteAccess(origin: string): Promise<boolean>;
   /** Extension version, for the About section. */
   getVersion(): string;
   /** Applied settings pushed by the background so open surfaces stay in step. */

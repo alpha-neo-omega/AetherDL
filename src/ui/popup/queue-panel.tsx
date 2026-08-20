@@ -12,6 +12,7 @@
  */
 import { useId, useState, type ReactNode } from 'react';
 import { formatBytes } from '@shared/utils';
+import type { AppError } from '@shared/result';
 import type { DownloadTask, TaskState } from '@shared/types';
 import { Button, IconButton, ProgressBar } from '@ui/components';
 
@@ -31,6 +32,12 @@ export interface QueuePanelLabels {
   readonly remove: string;
   readonly progressLabel: string;
   readonly taskState: Readonly<Record<TaskState, string>>;
+  /**
+   * Turns a job's own error into the sentence the user reads. A failed job that shows
+   * only "Failed" tells the user nothing: an encrypted stream, a 404, a declined
+   * permission and a full disk are the same word and different problems (§20.5).
+   */
+  readonly describeFailure: (error: AppError) => string;
 }
 
 export interface QueuePanelProps {
@@ -127,6 +134,9 @@ export function QueuePanel(props: QueuePanelProps): ReactNode {
                     </span>
                     <span className="adl-queue__item-state">{labels.taskState[task.state]}</span>
                   </div>
+                  {task.state === 'failed' && task.error !== undefined && (
+                    <p className="adl-queue__item-reason">{labels.describeFailure(task.error)}</p>
+                  )}
                   {LIVE_STATES.has(task.state) && (
                     <ProgressBar
                       label={`${labels.progressLabel}: ${task.filename}`}

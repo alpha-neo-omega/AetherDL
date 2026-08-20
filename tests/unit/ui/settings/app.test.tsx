@@ -323,11 +323,18 @@ describe('ui/settings SettingsApp — optional permissions', () => {
     const fake = createFakeSettingsClient();
     const view = await mount(fake);
 
+    // Site access is listed in the same section, so it appears after the two
+    // optional permissions.
     expect(texts(view.container, '.adl-permission__label')).toEqual([
       'Notifications',
       'Context menu',
+      'Site access',
     ]);
-    expect(texts(view.container, '.adl-permission__state')).toEqual(['Not granted', 'Not granted']);
+    expect(texts(view.container, '.adl-permission__state')).toEqual([
+      'Not granted',
+      'Not granted',
+      'No site access has been granted.',
+    ]);
     expect(fake.calls.some((call) => call.startsWith('requestPermission'))).toBe(false);
     view.unmount();
   });
@@ -511,6 +518,72 @@ describe('ui/settings SettingsApp — accessibility and about', () => {
     for (const forbidden of ['diagnostics', 'usage data', 'analytics', 'telemetry settings']) {
       expect(text.toLowerCase()).not.toContain(forbidden);
     }
+    view.unmount();
+  });
+});
+
+describe('ui/settings SettingsApp — site access (§4.15)', () => {
+  it('lists every granted origin, so the user can see what was given away', async () => {
+    const fake = createFakeSettingsClient();
+    fake.siteAccess.add('https://cdn.test/*');
+    fake.siteAccess.add('https://media.example/*');
+    const view = await mount(fake);
+
+    expect(texts(view.container, '.adl-sites__origin')).toEqual([
+      'https://cdn.test/*',
+      'https://media.example/*',
+    ]);
+    view.unmount();
+  });
+
+  it('withdraws one origin without touching the others', async () => {
+    const fake = createFakeSettingsClient();
+    fake.siteAccess.add('https://cdn.test/*');
+    fake.siteAccess.add('https://media.example/*');
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Revoke: https://cdn.test/*'));
+    await flush();
+
+    expect(fake.calls).toContain('revokeSiteAccess:https://cdn.test/*');
+    expect([...fake.siteAccess]).toEqual(['https://media.example/*']);
+    // Re-read from the browser rather than assumed: the list reflects what is granted.
+    expect(texts(view.container, '.adl-sites__origin')).toEqual(['https://media.example/*']);
+    view.unmount();
+  });
+
+  it('says plainly when nothing has been granted', async () => {
+    const fake = createFakeSettingsClient();
+    const view = await mount(fake);
+
+    expect(view.container.textContent).toContain('No site access has been granted.');
+    expect(byName(view.container, 'Revoke: https://cdn.test/*')).toBeUndefined();
+    view.unmount();
+  });
+
+  it('still renders the page when the browser cannot report granted origins', async () => {
+    // One unsupported call must not cost the user every other setting (§11.5, §7.2).
+    const fake = createFakeSettingsClient();
+    fake.failNext('listSiteAccess', new Error('permissions.getAll is unavailable'));
+    const view = await mount(fake);
+
+    // The rest of the page is intact: the form renders and is usable.
+    expect(field(view, 'Warn about duplicates')).toBeDefined();
+    expect(view.container.textContent).toContain('No site access has been granted.');
+    view.unmount();
+  });
+
+  it('reports a failed revoke instead of pretending it worked', async () => {
+    const fake = createFakeSettingsClient();
+    fake.siteAccess.add('https://cdn.test/*');
+    const view = await mount(fake);
+    fake.failNext('revokeSiteAccess', new Error('browser said no'));
+
+    click(requireByName(view.container, 'Revoke: https://cdn.test/*'));
+    await flush();
+
+    expect(view.container.querySelector('.adl-notice')).not.toBeNull();
+    expect(texts(view.container, '.adl-sites__origin')).toEqual(['https://cdn.test/*']);
     view.unmount();
   });
 });

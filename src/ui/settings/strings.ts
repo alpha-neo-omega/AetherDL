@@ -85,6 +85,10 @@ export const SETTINGS_EN_MESSAGES = {
   'permissions.contextMenus': 'Context menu',
   'permissions.contextMenus.help': 'Needed to add entries to the right-click menu.',
   'permissions.denied': 'The browser did not grant that permission.',
+  'permissions.sites': 'Site access',
+  'permissions.sites.help':
+    'Sites AetherDL may read a stream from. Each one was granted when you started a download; revoking one only stops stream downloads from that site.',
+  'permissions.sites.none': 'No site access has been granted.',
 
   'about.version': 'Version',
   'about.shortcut': 'Keyboard shortcut',

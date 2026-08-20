@@ -40,7 +40,7 @@ import type {
   MediaItem,
   TaskState,
 } from '@shared/types';
-import { TypedEventEmitter, type Unsubscribe } from '@shared/utils';
+import { parseUrl, TypedEventEmitter, type Unsubscribe } from '@shared/utils';
 import {
   createDownloadRuntimeState,
   type DownloadRuntimeHealth,
@@ -352,6 +352,15 @@ export function createBackgroundDownloadRuntime(
     } finally {
       state.endOperation();
     }
+    // A previous worker generation may have left an offscreen document open, holding
+    // a stream-sized blob nothing tracks any more (§8.9, §12.1).
+    if (streamDelivery?.reset !== undefined) {
+      try {
+        await streamDelivery.reset();
+      } catch (cause) {
+        emitError('stream-reset-failed', cause);
+      }
+    }
     // Pause is idempotent and guarantees the resume below actually pumps, so jobs
     // interrupted by a previous teardown restart from their reconstructed state
     // even if boot ran without `start()` having held scheduling (§8.9, §15.8).
@@ -398,6 +407,65 @@ export function createBackgroundDownloadRuntime(
     }
   };
 
+  /** `https://cdn.example/*` for a manifest URL; nothing for anything else. */
+  const streamOriginOf = (item: MediaItem): string | undefined => {
+    if (streamDelivery?.handles(item.url) !== true) {
+      return undefined;
+    }
+    const parsed = parseUrl(item.url);
+    return parsed === undefined ? undefined : `${parsed.origin}/*`;
+  };
+
+  /**
+   * Keep the items whose hosts are granted, asking for the ones that are not. Items
+   * left without access are dropped with a reported reason; everything else proceeds,
+   * so one declined stream never blocks the rest of a batch.
+   */
+  const withStreamHostAccess = async (
+    items: readonly MediaItem[],
+  ): Promise<readonly MediaItem[]> => {
+    const origins = new Map<string, MediaItem[]>();
+    for (const item of items) {
+      const origin = streamOriginOf(item);
+      if (origin === undefined) {
+        continue;
+      }
+      const group = origins.get(origin) ?? [];
+      group.push(item);
+      origins.set(origin, group);
+    }
+    if (origins.size === 0) {
+      return items;
+    }
+    const refused = new Set<MediaItem>();
+    for (const [origin, group] of origins) {
+      let granted = false;
+      try {
+        granted =
+          (await browser.permissions.containsHosts([origin])) ||
+          (await browser.permissions.requestHosts([origin]));
+      } catch (cause) {
+        // A request outside a user gesture throws on some engines; that is a "no",
+        // not a crash, and the user is told which host is missing.
+        emitError('download-stream-host-request-failed', cause);
+        granted = false;
+      }
+      if (!granted) {
+        for (const item of group) {
+          refused.add(item);
+        }
+        publishError(
+          new PermissionDeniedError('Access to the media host was not granted', {
+            code: 'download-stream-host-denied',
+            messageKey: 'error.permission.host',
+            context: { origin },
+          }).toAppError(),
+        );
+      }
+    }
+    return items.filter((item) => !refused.has(item));
+  };
+
   const enqueueItems = async (itemIds: readonly string[]): Promise<void> => {
     await ensureReady();
     if (!(await hasDownloadPermission())) {
@@ -423,9 +491,18 @@ export function createBackgroundDownloadRuntime(
     if (items.length === 0) {
       return;
     }
+    // Stream downloads read from the media host, so they need that host granted. The
+    // popup asks on the click, but this funnel also serves the context menu (§4.13),
+    // where nothing has asked yet — and without the grant the fetches would fail with
+    // an opaque network error. Ask here too, and if the answer is no, say so plainly
+    // instead of queueing work that cannot succeed (§13.7, §20.5).
+    const downloadable = await withStreamHostAccess(items);
+    if (downloadable.length === 0) {
+      return;
+    }
     // Validation, queueing, scheduling, retry and history all happen inside the
     // existing manager; the runtime only supplies the resolved items (§10.1).
-    await manager.enqueue(items);
+    await manager.enqueue(downloadable);
   };
 
   const forwardManagerEvents = (): void => {

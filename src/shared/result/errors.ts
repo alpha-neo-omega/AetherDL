@@ -9,7 +9,7 @@
  * Dependencies: shared/result (AppError, ErrorCategory).
  * Public API: PlatformError, StorageError, PermissionError, MessagingError,
  *          RuntimeError, DownloadError, TabError, ValidationError, HttpError,
- *          NetworkError.
+ *          NetworkError, DrmError.
  *
  * Note: imported via the subpath `@shared/result/errors` (not re-exported from the
  * result index) to keep the dependency edge one-way and cycle-free.
@@ -109,4 +109,13 @@ export class TabError extends PlatformError {
 /** Invalid input/argument (§20.3 `validation`). */
 export class ValidationError extends PlatformError {
   readonly category: ErrorCategory = 'validation';
+}
+
+/**
+ * Protected content was refused (§6, ADR-005). Its own category so no surface can
+ * describe it as a network problem and no policy can retry it. Nothing in this
+ * codebase handles keys; this is the error raised INSTEAD of doing so.
+ */
+export class DrmError extends PlatformError {
+  readonly category: ErrorCategory = 'drm';
 }

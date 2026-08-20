@@ -387,6 +387,37 @@ function SettingsSurface(props: SurfaceProps): ReactNode {
               t('permissions.contextMenus'),
               t('permissions.contextMenus.help'),
             )}
+
+          {/* Site access is the most consequential thing AetherDL asks for — a stream
+              download reads from the media host — so the grants are listed here and
+              can be withdrawn from here. A grant the user cannot see is one they
+              cannot withdraw (§4.15, §13.7). */}
+          <div className="adl-permission">
+            <div className="adl-permission__text">
+              <p className="adl-permission__label">{t('permissions.sites')}</p>
+              <p className="adl-field-row__help">{t('permissions.sites.help')}</p>
+            </div>
+          </div>
+          {runtime.siteAccess.length === 0 ? (
+            <p className="adl-permission__state">{t('permissions.sites.none')}</p>
+          ) : (
+            <ul className="adl-sites" aria-label={t('permissions.sites')}>
+              {runtime.siteAccess.map((origin) => (
+                <li className="adl-sites__item" key={origin}>
+                  <span className="adl-sites__origin">{origin}</span>
+                  <Button
+                    variant="text"
+                    ariaLabel={`${t('permissions.revoke')}: ${origin}`}
+                    onClick={() => {
+                      actions.revokeSite(origin);
+                    }}
+                  >
+                    {t('permissions.revoke')}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="adl-settings__section" aria-labelledby="adl-about">

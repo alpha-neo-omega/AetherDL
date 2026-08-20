@@ -15,13 +15,13 @@ human can paste them into each store console when publication happens.
 | Deliverable               | "store listings/assets", required by Phase 10 (PROJECT_BIBLE.md §22.11, line 2731; ROADMAP.md Phase 10 — Release Preparation, line 381)                                                   |
 | Phase                     | Phase 11 — Stable Release. Its included scope is "Store submission/publication via official channels only" (ROADMAP.md:398); Phase 10 prepared this copy                                   |
 | Publication phase         | Phase 11 — Stable Release, whose included scope is "Store submission/publication via official channels only" (ROADMAP.md:398)                                                             |
-| Version to submit         | `1.1.0` — feature release adding non-DRM HLS/DASH downloads and a wider container set (ADR-010). Earlier archives are superseded and gone                                                   |
+| Version to submit         | `1.2.0` — the 1.1.0 feature set (ADR-010) plus a thirteen-defect fix sweep, including three silent-failure classes                                                                        |
 | Distribution channel      | Official extension stores only. Any other update channel is a permanent non-goal (PROJECT_BIBLE.md §3.1 item N17, line 286 onward)                                                        |
 | Listing language          | English (`en`) only — the sole catalogue in the repository is `public/_locales/en/messages.json`, and `en` is the declared default and fallback locale (PROJECT_BIBLE.md §19.2)            |
 
 Two preconditions apply before this copy is used:
 
-1. **Cleared.** The artifacts under `dist/` are built at version `1.1.0`
+1. **Cleared.** The artifacts under `dist/` are built at version `1.2.0`
    (`dist/chrome/manifest.json`, `dist/firefox/manifest.json`, matching `package.json`), and the
    packaged archives in `dist/release/` carry the same version. Versions are synchronized across
    all target builds from one source (PROJECT_BIBLE.md §7.6; ROADMAP.md §7).
@@ -110,7 +110,9 @@ AetherDL finds the media on the page you are already looking at and downloads it
 - Downloads **non-encrypted HLS and DASH streams** by reading the playlist, fetching its segments in
   order and joining them into one file, which your browser then saves (PROJECT_BIBLE.md §10.6).
   State the limits rather than imply them away — see CHANGELOG.md "Known limitations":
-  **live** streams cannot be downloaded, a stream is assembled in memory and declined past 1 GiB,
+  a stream whose **audio is a separate track** is refused rather than saved as silent video (most
+  real-world DASH is packaged that way), **live** streams cannot be downloaded, a stream is
+  assembled in memory one at a time and declined past 1 GiB,
   the joined file is the segments concatenated with no remuxing (`.ts` for MPEG-TS, `.mp4` for
   fragmented MP4), only the highest-bandwidth rendition is taken, and **Firefox 115–127 cannot
   download streams at all** because the permission key AetherDL uses to ask for host access at the
@@ -153,7 +155,9 @@ FLV, 3GP. Audio: MP3, AAC, M4A, FLAC, WAV, OGG. Streams: non-encrypted HLS (`.m3
 segmented streams assembled into one file. (PROJECT_BIBLE.md §5.1–§5.5, §10.6)
 
 Not downloadable, by design: anything encrypted or DRM-protected, `blob:` media and MediaSource
-streams (they have no addressable bytes to fetch), and live streams (they have no end).
+streams (they have no addressable bytes to fetch), live streams (they have no end), and streams
+that keep audio in a separate track — AetherDL refuses those rather than saving a video with no
+sound, because joining the two tracks is out of scope.
 
 **What it will not do**
 
@@ -186,8 +190,8 @@ content-script injection at install — and **no site access at all**. On Chromi
 `offscreen`, which grants access to nothing: it lets AetherDL open its own hidden page to assemble a
 stream, because a Chromium service worker cannot do that itself.
 
-Site access is asked for **when you click download on a stream**, for that stream's hosts only, and
-can be revoked at any time. Declining cancels that download and nothing else. Notifications and
+Site access is asked for **when you click download on a stream**, for that stream's hosts only. Every
+granted site is listed in AetherDL's own Settings page, where each can be revoked. Declining cancels that download and nothing else. Notifications and
 context-menu entries are optional and are requested only if you turn those features on.
 (PROJECT_BIBLE.md §13.3, §13.7)
 
@@ -541,8 +545,8 @@ required field in at least one store console.
 - [ ] Approve the short summary and full description in §3, after checking them against the
       release build (see §1, precondition 2).
 - [ ] Approve the category choice per store (§3.4).
-- [ ] Confirm `1.1.0` is the version to submit. The artifacts on disk and the packaged archives all
-      read `1.1.0` (§1, precondition 1).
+- [ ] Confirm `1.2.0` is the version to submit. The artifacts on disk and the packaged archives all
+      read `1.2.0` (§1, precondition 1).
 - [ ] Read §4.3 before answering any store question about site access: the listing must say that no
       host permission is granted at install and that access is requested per-origin when the user
       downloads a stream — and, for AMO, that Firefox 115–127 cannot download streams at all.

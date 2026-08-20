@@ -6,7 +6,12 @@
  */
 import { act } from 'react';
 import type { MediaCardLabels } from '@ui/components';
-import { createTranslator, type PopupRuntimeClient, type QueuePanelLabels } from '@ui/popup';
+import {
+  createTranslator,
+  describeError,
+  type PopupRuntimeClient,
+  type QueuePanelLabels,
+} from '@ui/popup';
 import type {
   DownloadEventBroadcast,
   DownloadTask,
@@ -101,6 +106,7 @@ export function queueLabels(): QueuePanelLabels {
     remove: t('queue.remove'),
     progressLabel: t('card.progress'),
     taskState: taskStates(),
+    describeFailure: (error) => describeError(error, t).detail,
   };
 }
 

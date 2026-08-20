@@ -197,6 +197,68 @@ describe('offscreen assembly host', () => {
     expect(h.revoked).toEqual([]);
   });
 
+  it('aborts the request it was asked to, not another job for the same stream', async () => {
+    const resolvers: ((response: HttpResponse) => void)[] = [];
+    const h = harness();
+    const http: HttpClient = {
+      getText: () => Promise.resolve(PLAYLIST),
+      get: (url) =>
+        url.endsWith('a.ts')
+          ? Promise.resolve({
+              status: 200,
+              ok: true,
+              headers: {},
+              bytes: new Uint8Array(2),
+              url,
+            })
+          : new Promise<HttpResponse>((resolve) => {
+              resolvers.push(resolve);
+            }),
+    };
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http });
+    host.start();
+
+    // Two jobs, same manifest URL, different request ids.
+    const first = h.handlers.get('stream/assemble')?.({
+      manifestUrl: MASTER,
+      requestId: 'req-1',
+    }) as Promise<unknown>;
+    const second = h.handlers.get('stream/assemble')?.({
+      manifestUrl: MASTER,
+      requestId: 'req-2',
+    }) as Promise<unknown>;
+    await vi.waitFor(() => {
+      expect(resolvers.length).toBeGreaterThanOrEqual(2);
+    });
+
+    await h.handlers.get('stream/abort')?.({ manifestUrl: MASTER, requestId: 'req-2' });
+    for (const resolve of resolvers) {
+      resolve({ status: 200, ok: true, headers: {}, bytes: new Uint8Array(2), url: 'x' });
+    }
+
+    await expect(second).rejects.toMatchObject({ code: 'stream-aborted' });
+    // The other job is untouched.
+    await expect(first).resolves.toMatchObject({ segmentCount: 2 });
+  });
+
+  it('tags its progress broadcasts with the request id it was given', async () => {
+    const h = harness({
+      [MASTER]: PLAYLIST,
+      'https://cdn.test/hls/a.ts': new Uint8Array(4),
+      'https://cdn.test/hls/b.ts': new Uint8Array(4),
+    });
+    const host = createStreamAssemblyHost({ messaging: h.messaging, http: h.http });
+    host.start();
+
+    await h.handlers.get('stream/assemble')?.({ manifestUrl: MASTER, requestId: 'req-9' });
+
+    expect(
+      h.broadcasts.every(
+        (message) => (message.payload as { requestId?: string }).requestId === 'req-9',
+      ),
+    ).toBe(true);
+  });
+
   it('releases every held URL and detaches its handlers on dispose', async () => {
     const h = harness({
       [MASTER]: PLAYLIST,

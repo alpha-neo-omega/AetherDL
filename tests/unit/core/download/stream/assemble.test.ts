@@ -18,6 +18,8 @@ const bytes = (fill: number, length = 4): Uint8Array => new Uint8Array(length).f
 function stubHttp(
   routes: Readonly<Record<string, string | Uint8Array | Error>>,
   onRequest?: (url: string, options?: HttpRequestOptions) => void,
+  /** Answer range requests the way a broken server would: 200 and the whole file. */
+  ignoreRanges = false,
 ): HttpClient {
   const answer = (url: string, options?: HttpRequestOptions): HttpResponse => {
     onRequest?.(url, options);
@@ -33,7 +35,18 @@ function stubHttp(
       throw route;
     }
     const body = typeof route === 'string' ? new TextEncoder().encode(route) : route;
-    return { status: 200, ok: true, headers: {}, bytes: body, url };
+    if (options?.range === undefined || ignoreRanges) {
+      return { status: 200, ok: true, headers: {}, bytes: body, url };
+    }
+    // A server honouring the range returns 206 and exactly the slice asked for.
+    const end = options.range.last === undefined ? body.byteLength : options.range.last + 1;
+    return {
+      status: 206,
+      ok: true,
+      headers: {},
+      bytes: body.subarray(options.range.first, end),
+      url,
+    };
   };
   return {
     get: (url, options): Promise<HttpResponse> => Promise.resolve(answer(url, options)),
@@ -275,6 +288,198 @@ describe('assembleStream: DASH', () => {
       return;
     }
     expect(result.error.code).toBe('stream-dash-dynamic');
+  });
+});
+
+describe('assembleStream: streams whose audio is a separate track', () => {
+  it('refuses an HLS master whose chosen variant has no audio of its own', async () => {
+    const master = 'https://cdn.test/hls/master.m3u8';
+    const seen: string[] = [];
+    const http = stubHttp(
+      {
+        [master]: [
+          '#EXTM3U',
+          '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+          '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="aac"',
+          'video/720.m3u8',
+        ].join('\n'),
+      },
+      (url) => seen.push(url),
+    );
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.code).toBe('stream-hls-separate-audio');
+    expect(result.error.retryable).toBe(false);
+    // Refused at the master: the variant playlist is never even read.
+    expect(seen).toEqual([master]);
+  });
+
+  it('still assembles a master whose audio is muxed into the variants', async () => {
+    const master = 'https://cdn.test/hls/master.m3u8';
+    const http = stubHttp({
+      [master]: [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES',
+        '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aac"',
+        'v.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/v.m3u8': ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXT-X-ENDLIST'].join('\n'),
+      'https://cdn.test/hls/a.ts': bytes(1, 8),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a DASH manifest that splits audio and video across AdaptationSets', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const http = stubHttp({
+      [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT8S"><Period duration="PT8S">
+        <AdaptationSet mimeType="video/mp4"><SegmentTemplate media="v-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="v" bandwidth="2000000" width="1280" height="720"/></AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4"><SegmentTemplate media="a-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="a" bandwidth="128000"/></AdaptationSet>
+      </Period></MPD>`,
+    });
+
+    const result = await assembleStream({ manifestUrl: mpdUrl, http });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.code).toBe('stream-dash-separate-audio');
+  });
+
+  it('assembles a DASH manifest whose single set carries both tracks', async () => {
+    const mpdUrl = 'https://cdn.test/dash/manifest.mpd';
+    const http = stubHttp({
+      [mpdUrl]: `<MPD type="static" mediaPresentationDuration="PT4S"><Period duration="PT4S">
+        <AdaptationSet mimeType="video/mp4" codecs="avc1.640028,mp4a.40.2">
+          <SegmentTemplate media="s-$Number$.m4s" duration="4" timescale="1"/>
+          <Representation id="av" bandwidth="2000000"/></AdaptationSet>
+      </Period></MPD>`,
+      'https://cdn.test/dash/s-1.m4s': bytes(1, 8),
+    });
+
+    const result = await assembleStream({ manifestUrl: mpdUrl, http });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('assembleStream: byte-range segments', () => {
+  const master = 'https://cdn.test/hls/master.m3u8';
+  const playlist = [
+    '#EXTM3U',
+    '#EXTINF:4,',
+    '#EXT-X-BYTERANGE:10@0',
+    'all.ts',
+    '#EXTINF:4,',
+    '#EXT-X-BYTERANGE:10',
+    'all.ts',
+    '#EXT-X-ENDLIST',
+  ].join('\n');
+
+  it('joins exactly the requested slices when the server honours Range', async () => {
+    const http = stubHttp({ [master]: playlist, 'https://cdn.test/hls/all.ts': bytes(7, 40) });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.byteLength).toBe(20);
+  });
+
+  it('refuses a segment the server answered without the range', async () => {
+    // The silent-corruption case: 200 and the whole 40-byte file for a 10-byte slice.
+    const http = stubHttp(
+      { [master]: playlist, 'https://cdn.test/hls/all.ts': bytes(7, 40) },
+      undefined,
+      true,
+    );
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.code).toBe('stream-range-ignored');
+  });
+});
+
+describe('assembleStream: how a refusal describes itself', () => {
+  const master = 'https://cdn.test/hls/master.m3u8';
+
+  it('classifies an encrypted stream as protected media, not as a network problem', async () => {
+    const http = stubHttp({
+      [master]: [
+        '#EXTM3U',
+        '#EXT-X-KEY:METHOD=AES-128,URI="https://keys.test/k"',
+        '#EXTINF:4,',
+        'a.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    // The user must be told the media is protected — never "check your network".
+    expect(result.error.category).toBe('drm');
+    expect(result.error.messageKey).toBe('error.drm');
+    expect(result.error.retryable).toBe(false);
+  });
+
+  it.each([
+    [
+      'a live playlist',
+      ['#EXTM3U', '#EXT-X-TARGETDURATION:4', '#EXTINF:4,', 'a.ts'].join('\n'),
+      'error.download.stream.live',
+    ],
+    [
+      'a playlist with no segments',
+      ['#EXTM3U', '#EXT-X-ENDLIST'].join('\n'),
+      'error.download.stream',
+    ],
+  ])('gives %s its own message key', async (_label, body, messageKey) => {
+    const http = stubHttp({ [master]: body });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.messageKey).toBe(messageKey);
+    expect(result.error.category).toBe('network');
+  });
+
+  it('describes an oversize stream as too large', async () => {
+    const http = stubHttp({
+      [master]: ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXT-X-ENDLIST'].join('\n'),
+      'https://cdn.test/hls/a.ts': bytes(1, 64),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http, maxTotalBytes: 10 });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.messageKey).toBe('error.download.stream.tooLarge');
   });
 });
 

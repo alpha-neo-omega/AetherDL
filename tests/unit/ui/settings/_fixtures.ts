@@ -32,6 +32,8 @@ export interface FakeSettingsClient {
   grantRequests: boolean;
   /** Optional permissions this fake browser can offer at all (§7.2). */
   supported: Set<OptionalPermission>;
+  /** Site origins this fake browser reports as granted (§4.15). */
+  siteAccess: Set<string>;
   settings: Settings;
   history: readonly HistoryRecord[];
   /** Make the next call of a method reject. */
@@ -68,6 +70,7 @@ export function createFakeSettingsClient(): FakeSettingsClient {
     granted: new Set<OptionalPermission>(),
     // A Chromium-shaped browser by default: both permissions are offerable.
     supported: new Set<OptionalPermission>(['notifications', 'contextMenus']),
+    siteAccess: new Set<string>(),
     grantRequests: true,
     settings: DEFAULT_SETTINGS,
     history: [],
@@ -124,6 +127,12 @@ export function createFakeSettingsClient(): FakeSettingsClient {
         }),
       removePermission: (permission) =>
         guard('removePermission', permission, () => fake.granted.delete(permission)),
+      listSiteAccess: () =>
+        guard<readonly string[]>('listSiteAccess', '', () =>
+          [...fake.siteAccess].sort((left, right) => left.localeCompare(right)),
+        ),
+      revokeSiteAccess: (origin) =>
+        guard('revokeSiteAccess', origin, () => fake.siteAccess.delete(origin)),
       getVersion: () => '0.1.0',
       onSettingsChanged: (listener) => {
         listeners.add(listener);

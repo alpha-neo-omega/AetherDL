@@ -24,12 +24,13 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.1.0 — feature release, 2026-08-20.** Built on the 1.0.0 stable release: per-tab media
+**1.2.0 — defect sweep, 2026-08-20.** Built on 1.1.0, which was built on the 1.0.0 stable
+release: per-tab media
 detection, downloads through the browser's own download manager with a durable queue, retry and
 pause/resume, settings, local history, popup and settings surfaces, and the optional context-menu
 and notification integrations.
 
-1.1.0 adds, at the Project Owner's direction:
+1.1.0 added, at the Project Owner's direction:
 
 - **More containers.** MP4, WEBM, M4V, MKV, MOV, AVI, plus TS, M2TS, MTS, MPG/MPEG, WMV, FLV and
   3GP; audio as before.
@@ -64,12 +65,31 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
-Known limitations at 1.1.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
+### What 1.2.0 fixed
 
+Thirteen defects, found by hunting through the 1.1.0 code. Three produced silently wrong
+results, which is the worst class of failure this project can ship. The ones that matter to
+a user:
+
+- A stream whose **audio is a separate track** was saved as video with **no sound**. It is
+  now refused with a stated reason (see the limitations below).
+- A server that ignored a byte-range request produced a **corrupt file**. Refused now.
+- A failed download said only "Failed". It now says **why**, and an encrypted stream reads
+  as protected media instead of "check your network".
+- A stream started from the **context menu** failed with an opaque network error, because
+  nothing had asked for host access. Every path asks now.
+- **Site access is listed in Settings**, with a Revoke for each granted origin.
+
+Known limitations at 1.2.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
+
+- **Streams that keep audio in a separate track cannot be downloaded.** Most real-world
+  DASH, and much HLS, is packaged that way. AetherDL refuses rather than saving a silent
+  video; joining the tracks (muxing) is out of scope.
 - **Live** streams cannot be downloaded (a live playlist has no end); they are reported as such.
-- A stream is assembled **in memory** and refused past 1 GiB. The joined file is the segments
-  concatenated, with no remuxing: MPEG-TS segments produce a `.ts` file and fMP4 segments a `.mp4`
-  file. Players handle these; some editors prefer a remuxed file.
+- A stream is assembled **in memory**, one at a time, refused past 1 GiB, and is **not
+  resumable** — pausing or cancelling discards what was fetched. The joined file is the
+  segments concatenated, with no remuxing: MPEG-TS segments produce a `.ts` file and fMP4
+  segments a `.mp4` file. Players handle these; some editors prefer a remuxed file.
 - **Firefox 115–127 cannot download streams at all.** Firefox added
   `optional_host_permissions` in 128, and asking for host access at point of use is the only way
   this project will take it. Progressive downloads are unaffected.

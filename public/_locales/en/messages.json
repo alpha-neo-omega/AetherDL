@@ -774,5 +774,61 @@
   "settings_error_retry": {
     "message": "Retry",
     "description": "Settings: settings.error.retry"
+  },
+  "card_delivery_progressive": {
+    "message": "Progressive file",
+    "description": "Popup: card.delivery.progressive"
+  },
+  "card_delivery_direct": {
+    "message": "Direct file",
+    "description": "Popup: card.delivery.direct"
+  },
+  "card_delivery_html5": {
+    "message": "HTML5 media",
+    "description": "Popup: card.delivery.html5"
+  },
+  "card_delivery_hls": {
+    "message": "HLS stream",
+    "description": "Popup: card.delivery.hls"
+  },
+  "card_delivery_dash": {
+    "message": "DASH stream",
+    "description": "Popup: card.delivery.dash"
+  },
+  "card_delivery_blob": {
+    "message": "In-page blob",
+    "description": "Popup: card.delivery.blob"
+  },
+  "error_download_stream": {
+    "message": "This stream could not be assembled into a file.",
+    "description": "Popup: error.download.stream"
+  },
+  "error_download_stream_live": {
+    "message": "This is a live stream. A live stream has no end, so there is nothing to save.",
+    "description": "Popup: error.download.stream.live"
+  },
+  "error_download_stream_tooLarge": {
+    "message": "This stream is too large to assemble in one piece on this device.",
+    "description": "Popup: error.download.stream.tooLarge"
+  },
+  "error_download_stream_tracks": {
+    "message": "This stream keeps its audio and video in separate tracks. AetherDL will not save it as a file with no sound.",
+    "description": "Popup: error.download.stream.tracks"
+  },
+  "card_delivery_mediaSource": {
+    "message": "MediaSource stream",
+    "description": "Popup: card.delivery.mediaSource"
+  },
+  "permissions_sites": {
+    "message": "Site access",
+    "description": "Settings: permissions.sites"
+  },
+  "permissions_sites_help": {
+    "message": "Sites AetherDL may read a stream from. Each one was granted when you started a download; revoking one only stops stream downloads from that site.",
+    "description": "Settings: permissions.sites.help"
+  },
+  "permissions_sites_none": {
+    "message": "No site access has been granted.",
+    "description": "Settings: permissions.sites.none"
   }
 }

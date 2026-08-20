@@ -61,6 +61,13 @@ export const EN_MESSAGES = {
   'card.field.filename': 'Filename',
   'card.field.codec': 'Codec',
   'card.field.delivery': 'Delivery',
+  'card.delivery.progressive': 'Progressive file',
+  'card.delivery.direct': 'Direct file',
+  'card.delivery.html5': 'HTML5 media',
+  'card.delivery.hls': 'HLS stream',
+  'card.delivery.dash': 'DASH stream',
+  'card.delivery.blob': 'In-page blob',
+  'card.delivery.mediaSource': 'MediaSource stream',
 
   'queue.title': 'Queue',
   'queue.show': 'Show queue',
@@ -96,6 +103,13 @@ export const EN_MESSAGES = {
   'error.permission': 'AetherDL needs the downloads permission to save files.',
   'error.permission.host':
     'AetherDL needs access to the media host to download a stream. Nothing is downloaded without it.',
+  'error.download.stream': 'This stream could not be assembled into a file.',
+  'error.download.stream.live':
+    'This is a live stream. A live stream has no end, so there is nothing to save.',
+  'error.download.stream.tooLarge':
+    'This stream is too large to assemble in one piece on this device.',
+  'error.download.stream.tracks':
+    'This stream keeps its audio and video in separate tracks. AetherDL will not save it as a file with no sound.',
   'error.capability': 'Not supported in this browser.',
   'error.internal': 'Something went wrong. Try again.',
   'error.unavailable.title': 'AetherDL is not responding',

@@ -70,7 +70,8 @@ describe('platform/http: reading a resource', () => {
     const seen: RequestInit[] = [];
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       seen.push(init);
-      return respond(text('chunk'));
+      // A well-behaved server answers a range request with 206.
+      return respond(text('chunk'), { status: 206 });
     });
     const client = createHttpClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
 
@@ -82,6 +83,18 @@ describe('platform/http: reading a resource', () => {
     // Reads only, and never with the user's cookies attached.
     expect(seen[0]?.method).toBe('GET');
     expect(seen[0]?.credentials).toBe('omit');
+  });
+
+  it('refuses a range request the server answered with the whole resource', async () => {
+    // The dangerous case: 200 + the entire file where a slice was asked for. Accepting
+    // it would corrupt whatever the caller is assembling.
+    const client = createHttpClient({
+      fetchImpl: (async () => respond(text('the entire file'))) as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.get('https://cdn.test/v.mp4', { range: { first: 0, last: 3 } }),
+    ).rejects.toMatchObject({ code: 'http-range-ignored', retryable: false });
   });
 
   it('refuses a range that ends before it starts', async () => {

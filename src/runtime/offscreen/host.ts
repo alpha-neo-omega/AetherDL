@@ -48,10 +48,21 @@ function readRequest(payload: unknown): StreamAssembleRequest | undefined {
     return undefined;
   }
   const maxTotalBytes = record['maxTotalBytes'];
+  const requestId = record['requestId'];
   return {
     manifestUrl,
     ...(typeof maxTotalBytes === 'number' && maxTotalBytes > 0 && { maxTotalBytes }),
+    ...(typeof requestId === 'string' && requestId !== '' && { requestId }),
   };
+}
+
+/**
+ * What an assembly is keyed by while it runs: the request id when the caller sent
+ * one, the manifest URL otherwise. Keying on the URL alone let one job's cancel abort
+ * another job for the same stream.
+ */
+function keyOf(request: StreamAssembleRequest): string {
+  return request.requestId ?? request.manifestUrl;
 }
 
 function readUrl(payload: unknown): string | undefined {
@@ -84,7 +95,8 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
       });
     }
     const controller = new AbortController();
-    running.set(request.manifestUrl, controller);
+    const key = keyOf(request);
+    running.set(key, controller);
     try {
       const result = await delivery.assemble({
         manifestUrl: request.manifestUrl,
@@ -93,6 +105,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
         onProgress: (progress): void => {
           void bus.broadcast(STREAM_PROGRESS_BROADCAST, {
             manifestUrl: request.manifestUrl,
+            ...(request.requestId !== undefined && { requestId: request.requestId }),
             ...progress,
           });
         },
@@ -107,7 +120,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
         origins: result.origins,
       };
     } finally {
-      running.delete(request.manifestUrl);
+      running.delete(key);
     }
   };
 
@@ -132,7 +145,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
         bus.on('stream/abort', (payload) => {
           const request = readRequest(payload);
           if (request !== undefined) {
-            running.get(request.manifestUrl)?.abort();
+            running.get(keyOf(request))?.abort();
           }
         }),
       );

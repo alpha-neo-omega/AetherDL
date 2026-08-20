@@ -5,7 +5,8 @@
  * Restrictions: Domain layer — depends only on shared/ (§8.4).
  * Dependencies: shared/result (PlatformError, ErrorCategory).
  * Public API: DownloadValidationError, QueueError, RetryError, FilenameError,
- *          SchedulerError, PermissionDeniedError, StreamAssemblyError.
+ *          SchedulerError, PermissionDeniedError, StreamAssemblyError,
+ *          StreamProtectedError.
  */
 import type { ErrorCategory } from '@shared/result';
 import { PlatformError } from '@shared/result/errors';
@@ -47,4 +48,13 @@ export class PermissionDeniedError extends PlatformError {
  */
 export class StreamAssemblyError extends PlatformError {
   readonly category: ErrorCategory = 'network';
+}
+
+/**
+ * A stream was refused because it is encrypted (§6, ADR-005). Its own category, not
+ * `network`, so the surfaces describe it as protected media rather than as a
+ * connection problem — and so no caller can mistake it for something to retry.
+ */
+export class StreamProtectedError extends PlatformError {
+  readonly category: ErrorCategory = 'drm';
 }

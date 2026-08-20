@@ -9,6 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] — Defect sweep: silent failures made loud
+
+A hunt through the 1.1.0 UI and background code turned up thirteen defects; all thirteen
+are fixed here. Three of them produced **silently wrong results**, which is the class this
+project treats as worst: a file that looks right but is not, or a failure the user cannot
+see.
+
+### Fixed
+
+- **Streams whose audio is a separate track produced silent video.** An HLS master with an
+  `#EXT-X-MEDIA:TYPE=AUDIO` rendition, or a DASH manifest with audio and video in separate
+  `AdaptationSet`s, was assembled from the video track alone — a plausible file with no
+  sound and no warning. Both are now refused before a segment is fetched, with a stated
+  reason. Joining the tracks would be muxing, which this project does not do
+  (`src/core/download/stream/hls.ts`, `dash.ts`, `assemble.ts`).
+- **A byte-range request answered `200` was accepted whole**, so a server that ignored
+  `Range` had its entire file concatenated per segment — a corrupt output, silently. The
+  HTTP client now refuses a range answered with anything but `206`, and assembly checks the
+  returned length against the range it asked for (`src/platform/http/service.ts`,
+  `src/core/download/stream/assemble.ts`).
+- **The queue never showed why a job failed.** An encrypted stream, a 404, a declined
+  permission and an oversize stream all rendered as the single word "Failed"; the reason
+  was on the task and thrown away at the last inch. Each failed job now shows its own
+  reason (`src/ui/popup/queue-panel.tsx`, `src/ui/popup/app.tsx`).
+- **Stream refusals were shown with network copy** — an encrypted stream told the user to
+  "check your network". Refusals now carry their own class and wording: protected media is
+  `drm` and never retried, and live, oversize and split-track streams each have their own
+  sentence (`src/shared/result/stream.ts`, `src/core/download/errors.ts`,
+  `src/ui/popup/strings.ts`).
+- **On Chromium those reasons were lost anyway.** Assembly runs in an offscreen document,
+  and a runtime message carries only `{message, code}`, so every refusal arrived as a
+  generic messaging error. The client now rebuilds the typed error from the code, so the
+  wording and the retryable flag survive the boundary — verified in a real browser
+  (`src/platform/stream/offscreen.ts`, `tests/e2e/stream-chromium.spec.ts`).
+- **Context-menu downloads never asked for host access**, so a stream started from the
+  right-click menu failed with an opaque network error. Every enqueue path now checks and
+  asks, and reports which host was declined instead of queueing work that cannot succeed
+  (`src/runtime/background/downloads.ts`).
+- **`pause()` on an assembling job broke it.** `preparing → paused` is not a legal
+  transition, so the job either failed unrecoverably or hung in `preparing` holding a
+  concurrency slot for ever. It now parks properly, releases its slot, and re-assembles on
+  resume (`src/core/download/manager/manager.ts`).
+- **Progress rewrote the whole queue per segment.** Assembly reports once per segment and
+  each patch persisted every task, so a long stream meant thousands of IndexedDB writes.
+  Patches are throttled to one per 500 ms, with the final segment always written.
+- **Concurrent assemblies were unbounded in memory** — three jobs × the 1 GiB ceiling.
+  Assembly is now serialized to one at a time; progressive downloads are unaffected.
+- **Granted site origins were invisible and unrevocable in-app.** The Permissions panel
+  managed only notifications and the context menu, while the grants that actually touch
+  sites were hidden. Settings now lists every granted origin with its own Revoke
+  (`src/ui/settings/app.tsx`, `src/runtime/settings/client.ts`, §4.15).
+- **History recorded the wrong container for streams** (`m3u8` for a file saved as `.ts`).
+  It now records the container that was actually written.
+- **A blob was orphaned across a service-worker restart.** An offscreen document outlives
+  the worker that opened it, so its bytes stayed resident with nothing tracking them. Boot
+  now drops a document left by a previous generation.
+- **Aborting one assembly could abort another** for the same manifest URL: the host keyed
+  in-flight work by URL. Each request now carries its own id.
+- **A playlist opening with a blank line was rejected**, and the media card printed the raw
+  delivery enum (`hls`, `media-source`) instead of words. Both fixed; delivery types are
+  now named in the message catalogue.
+
+### Added
+
+- Site-access management in Settings: the granted origins, and a Revoke for each.
+- 43 tests covering every fix, including two new browser cases — a real Chromium refusal of
+  a split-audio stream, and the DRM taxonomy surviving the offscreen boundary.
+
+### Known limitations
+
+- Unchanged from 1.1.0, with one addition: **streams that keep audio in a separate track
+  cannot be downloaded at all.** Most real-world DASH and much HLS is packaged that way.
+  The alternative — saving a silent video — is worse, and muxing is out of scope.
+- Streams are now assembled one at a time, so two queued streams no longer overlap.
+
 ## [1.1.0] — Non-DRM stream downloads and a wider container set
 
 A feature release, directed by the Project Owner on 2026-08-20 over the frozen 1.0.0 scope. It adds

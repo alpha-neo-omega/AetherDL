@@ -26,6 +26,14 @@ export interface DashSegment {
 
 export interface DashRepresentation {
   readonly id: string;
+  /**
+   * Which AdaptationSet this came from. A manifest that puts video and audio in
+   * separate sets carries no single representation with both, so assembly would
+   * produce silent video; the caller refuses instead of saving that.
+   */
+  readonly setIndex: number;
+  /** `video`, `audio`, or whatever the manifest declared, lowercased. */
+  readonly contentType?: string;
   readonly mimeType?: string;
   readonly codecs?: string;
   readonly bandwidth?: number;
@@ -311,6 +319,7 @@ export function parseDashManifest(text: string, manifestUrl: string): DashManife
 
   let adaptationSource = emptySource();
   let adaptationAttributes: Readonly<Record<string, string>> = {};
+  let adaptationIndex = -1;
   let representationAttributes: Readonly<Record<string, string>> | undefined;
   let representationSource = emptySource();
   let inRepresentation = false;
@@ -363,11 +372,16 @@ export function parseDashManifest(text: string, manifestUrl: string): DashManife
     );
     if (built !== undefined && built.segments.length > 0) {
       const mimeType = attributes['mimetype'] ?? adaptationAttributes['mimetype'];
+      const declaredType = attributes['contenttype'] ?? adaptationAttributes['contenttype'];
+      // `contentType` is optional in the wild; the MIME's own type says the same thing.
+      const contentType = (declaredType ?? mimeType?.split('/')[0])?.toLowerCase();
       const codecs = attributes['codecs'] ?? adaptationAttributes['codecs'];
       const width = numeric(attributes['width'] ?? adaptationAttributes['width']);
       const height = numeric(attributes['height'] ?? adaptationAttributes['height']);
       representations.push({
         id,
+        setIndex: Math.max(0, adaptationIndex),
+        ...(contentType !== undefined && contentType !== '' && { contentType }),
         segments: built.segments,
         ...(built.init !== undefined && { initSegment: built.init }),
         ...(mimeType !== undefined && { mimeType }),
@@ -443,6 +457,7 @@ export function parseDashManifest(text: string, manifestUrl: string): DashManife
         adaptationAttributes = tag.attributes;
         adaptationSource = emptySource();
         timelineTarget = 'adaptation';
+        adaptationIndex += 1;
         break;
       }
       case 'representation': {

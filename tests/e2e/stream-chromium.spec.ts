@@ -202,7 +202,61 @@ test.describe('AetherDL assembles a non-DRM HLS stream in Chromium', () => {
 
     const failed = queue.find((task) => task.item.url.endsWith('encrypted.m3u8'));
     expect(failed?.error?.code).toBe('stream-hls-encrypted');
+    // Protected media, described as protected media — and never retried. On Chromium
+    // this crosses the offscreen boundary, where only the code survives the wire.
+    expect(failed?.error?.category).toBe('drm');
+    expect(failed?.error?.messageKey).toBe('error.drm');
+    expect(failed?.error?.retryable).toBe(false);
     // Nothing new reached the downloads API, and no key was ever requested.
+    const after = await extension.worker.evaluate(() =>
+      chrome.downloads.search({}).then((found) => found.length),
+    );
+    expect(after).toBe(before);
+    await popup.close();
+  });
+
+  test('refuses a stream whose audio is a separate track, and says why', async () => {
+    const popup = await extension.page('popup.html');
+    const items = await sendMessage<readonly MediaItem[]>(popup, {
+      type: 'detection/run',
+      payload: {
+        pageUrl: `${site.origin}/with-media.html`,
+        domSignals: [
+          {
+            role: 'video',
+            tagName: 'VIDEO',
+            src: `${site.origin}/media/hls/split-audio.m3u8`,
+            width: 1280,
+            height: 720,
+          },
+        ],
+        observedUrls: [],
+      },
+    });
+    const split = items.find((item) => item.url.endsWith('split-audio.m3u8'));
+    expect(split).toBeDefined();
+
+    const before = await extension.worker.evaluate(() =>
+      chrome.downloads.search({}).then((found) => found.length),
+    );
+    await sendMessage(popup, {
+      type: 'download/enqueue',
+      payload: { itemIds: [split?.id ?? ''] },
+    });
+
+    const queue = await until(
+      'the split-track stream to be refused',
+      () => sendMessage<readonly DownloadTask[]>(popup, { type: 'download/query' }),
+      (tasks) =>
+        tasks.some((task) => task.item.url.endsWith('split-audio.m3u8') && task.state === 'failed'),
+      30_000,
+    );
+
+    const failed = queue.find((task) => task.item.url.endsWith('split-audio.m3u8'));
+    expect(failed?.error?.code).toBe('stream-hls-separate-audio');
+    // A silent video is never saved, and the reason is carried on the job so the
+    // popup can show it.
+    expect(failed?.error?.messageKey).toBe('error.download.stream.tracks');
     const after = await extension.worker.evaluate(() =>
       chrome.downloads.search({}).then((found) => found.length),
     );

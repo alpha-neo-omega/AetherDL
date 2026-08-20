@@ -24,6 +24,11 @@ export interface SettingsRuntimeData {
   readonly settings: Settings | undefined;
   readonly history: readonly HistoryRecord[];
   readonly permissions: Readonly<Record<OptionalPermission, boolean>>;
+  /**
+   * Site origins the user has granted (§4.15). Stream downloads ask for these at the
+   * moment of the click, so this is where the user sees — and withdraws — them.
+   */
+  readonly siteAccess: readonly string[];
   /** A failure that left the page with nothing to show (§11.5 error state). */
   readonly error: AppError | undefined;
   /** A recoverable failure shown alongside the form (§20.5). */
@@ -41,6 +46,8 @@ export interface SettingsRuntimeActions {
   exportHistory(filename: string): void;
   grant(permission: OptionalPermission): void;
   revoke(permission: OptionalPermission): void;
+  /** Withdraw one granted site origin. */
+  revokeSite(origin: string): void;
   dismissNotice(): void;
 }
 
@@ -53,8 +60,10 @@ type Action =
       readonly settings: Settings;
       readonly history: readonly HistoryRecord[];
       readonly permissions: Readonly<Record<OptionalPermission, boolean>>;
+      readonly siteAccess: readonly string[];
     }
   | { readonly type: 'settings'; readonly settings: Settings; readonly saved: boolean }
+  | { readonly type: 'siteAccess'; readonly siteAccess: readonly string[] }
   | { readonly type: 'history'; readonly history: readonly HistoryRecord[] }
   | {
       readonly type: 'permission';
@@ -70,6 +79,7 @@ const INITIAL: SettingsRuntimeData = {
   settings: undefined,
   history: [],
   permissions: { notifications: false, contextMenus: false },
+  siteAccess: [],
   error: undefined,
   notice: undefined,
   saved: false,
@@ -86,12 +96,15 @@ function reducer(state: SettingsRuntimeData, action: Action): SettingsRuntimeDat
         settings: action.settings,
         history: action.history,
         permissions: action.permissions,
+        siteAccess: action.siteAccess,
         error: undefined,
       };
     case 'settings':
       return { ...state, settings: action.settings, saved: action.saved, notice: undefined };
     case 'history':
       return { ...state, history: action.history };
+    case 'siteAccess':
+      return { ...state, siteAccess: action.siteAccess };
     case 'permission':
       return {
         ...state,
@@ -134,6 +147,12 @@ export function useSettingsRuntime(
     dispatch({ type: 'notice', error: toAppError(cause) });
   }, []);
 
+  const refreshSiteAccess = useCallback((): void => {
+    void client.listSiteAccess().then((siteAccess) => {
+      dispatch({ type: 'siteAccess', siteAccess });
+    }, fail);
+  }, [client, fail]);
+
   const refreshHistory = useCallback((): void => {
     void client.queryHistory().then((history) => {
       dispatch({ type: 'history', history });
@@ -148,8 +167,12 @@ export function useSettingsRuntime(
         const settings = await client.getSettings();
         const history = await client.queryHistory();
         const permissions = await readPermissions(client);
+        // Non-fatal on purpose: a browser that cannot report granted origins must not
+        // cost the user the whole settings page. An empty list is the honest answer,
+        // and every other section still works (§7.2, §11.5).
+        const siteAccess = await client.listSiteAccess().catch(() => []);
         if (!cancelled) {
-          dispatch({ type: 'loaded', settings, history, permissions });
+          dispatch({ type: 'loaded', settings, history, permissions, siteAccess });
         }
       } catch (cause) {
         if (!cancelled) {
@@ -219,11 +242,15 @@ export function useSettingsRuntime(
           dispatch({ type: 'permission', permission, granted: !removed });
         }, fail);
       },
+      revokeSite: (origin) => {
+        // Re-read rather than assume: the browser is the authority on what is granted.
+        void client.revokeSiteAccess(origin).then(refreshSiteAccess, fail);
+      },
       dismissNotice: () => {
         dispatch({ type: 'dismiss' });
       },
     }),
-    [client, fail, refreshHistory],
+    [client, fail, refreshHistory, refreshSiteAccess],
   );
 
   return { ...state, actions };

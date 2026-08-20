@@ -106,6 +106,17 @@ export function createSettingsRuntimeClient(browser: Browser): SettingsRuntimeCl
       return browser.permissions.remove([permissionName(browser, permission)]);
     },
 
+    async listSiteAccess(): Promise<readonly string[]> {
+      // Whatever the browser says is granted, sorted so the list does not reshuffle
+      // between reads (§4.15, §13.7).
+      const snapshot = await browser.permissions.getAll();
+      return [...snapshot.origins].sort((left, right) => left.localeCompare(right));
+    },
+
+    revokeSiteAccess(origin: string): Promise<boolean> {
+      return browser.permissions.removeHosts([origin]);
+    },
+
     getVersion(): string {
       return browser.runtime.getVersion();
     },

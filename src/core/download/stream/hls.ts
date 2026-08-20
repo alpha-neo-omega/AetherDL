@@ -35,6 +35,13 @@ export interface HlsVariant {
   readonly width?: number;
   readonly height?: number;
   readonly codecs?: string;
+  /**
+   * The `AUDIO` rendition group this variant expects, when it declares one. A
+   * variant that names a group whose renditions carry their own `URI` carries no
+   * audio itself: joining the two tracks is muxing, which this project does not do,
+   * so such a stream is refused rather than saved as silent video.
+   */
+  readonly audioGroup?: string;
 }
 
 /**
@@ -42,7 +49,12 @@ export interface HlsVariant {
  * the only outcome for encrypted content.
  */
 export type HlsPlaylist =
-  | { readonly kind: 'master'; readonly variants: readonly HlsVariant[] }
+  | {
+      readonly kind: 'master';
+      readonly variants: readonly HlsVariant[];
+      /** `AUDIO` group ids whose renditions live in their own playlist. */
+      readonly separateAudioGroups: readonly string[];
+    }
   | {
       readonly kind: 'media';
       /** A live playlist has no `#EXT-X-ENDLIST`; assembly needs a finished one. */
@@ -151,11 +163,16 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
   }
 
   const lines = text.split(/\r?\n/);
-  if ((lines[0] ?? '').trim() !== '#EXTM3U') {
+  // The tag must come first, but a file that opens with a blank line (or a BOM, which
+  // `trim` removes) is still the playlist it says it is; only content before the tag
+  // means this is not a playlist at all.
+  const firstMeaningful = lines.findIndex((line) => line.trim() !== '');
+  if (firstMeaningful === -1 || (lines[firstMeaningful] ?? '').trim() !== '#EXTM3U') {
     return refused('Not an HLS playlist (no #EXTM3U)', 'hls-not-a-playlist');
   }
 
   const variants: HlsVariant[] = [];
+  const separateAudioGroups = new Set<string>();
   const segments: HlsSegment[] = [];
   let live = true;
   let targetDurationSec: number | undefined;
@@ -179,10 +196,23 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
       continue;
     }
 
+    if (line.startsWith('#EXT-X-MEDIA:')) {
+      // An AUDIO rendition with its own URI is a separate track; one without a URI is
+      // muxed into the variants and needs no special handling.
+      const attributes = parseAttributes(line.slice(line.indexOf(':') + 1));
+      const type = (attributes['TYPE'] ?? '').trim().toUpperCase();
+      const group = attributes['GROUP-ID'];
+      if (type === 'AUDIO' && group !== undefined && attributes['URI'] !== undefined) {
+        separateAudioGroups.add(group);
+      }
+      continue;
+    }
+
     if (line.startsWith('#EXT-X-STREAM-INF:')) {
       const attributes = parseAttributes(line.slice(line.indexOf(':') + 1));
       const resolution = (attributes['RESOLUTION'] ?? '').split('x');
       pendingVariant = {
+        ...(attributes['AUDIO'] !== undefined && { audioGroup: attributes['AUDIO'] }),
         ...(numeric(attributes['BANDWIDTH']) !== undefined && {
           bandwidth: numeric(attributes['BANDWIDTH']) as number,
         }),
@@ -260,7 +290,7 @@ export function parseHlsPlaylist(text: string, manifestUrl: string): HlsPlaylist
   }
 
   if (variants.length > 0) {
-    return { kind: 'master', variants };
+    return { kind: 'master', variants, separateAudioGroups: [...separateAudioGroups] };
   }
   if (segments.length === 0) {
     return refused('Playlist lists no segments', 'hls-empty');

@@ -511,6 +511,15 @@ body {
   color: var(--adl-color-on-surface-variant);
 }
 
+/* Why a job failed. Text, not colour alone (§17.4), and it wraps rather than clips:
+   a reason the user cannot read is the same as no reason at all. */
+.adl-queue__item-reason {
+  margin: var(--adl-space-xs) 0 0;
+  font-size: var(--adl-type-label-small-size);
+  color: var(--adl-color-error);
+  overflow-wrap: anywhere;
+}
+
 .adl-queue__item-actions {
   display: flex;
   gap: var(--adl-space-xs);
@@ -654,6 +663,29 @@ body {
   margin: 0;
   font-size: var(--adl-type-label-small-size);
   color: var(--adl-color-on-surface-variant);
+}
+
+/* Granted site origins, each with its own withdrawal (§4.15). An origin can be long,
+   so it wraps rather than pushing the button out of reach. */
+.adl-sites {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adl-space-xs);
+  margin: var(--adl-space-xs) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adl-sites__item {
+  display: flex;
+  gap: var(--adl-space-sm);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.adl-sites__origin {
+  font-size: var(--adl-type-body-small-size);
+  overflow-wrap: anywhere;
 }
 
 /* ---- History view (§11.3) ---- */

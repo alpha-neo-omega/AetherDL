@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBrowserFrom } from '@platform/browser/factory';
 import { createMessageBus } from '@platform/messaging/service';
 import type { MessageBus } from '@platform/messaging';
+import type { StreamDelivery, StreamDeliveryAdapter } from '@platform/stream';
 import type { AppError } from '@shared/result';
 import type { DownloadEventBroadcast, MediaItem } from '@shared/types';
 import {
@@ -39,6 +40,8 @@ interface SetupOptions {
   readonly resolver?: MediaItemResolver;
   readonly grantDownloads?: boolean;
   readonly start?: boolean;
+  /** A stream-delivery adapter, or `null` to run with assembly off. */
+  readonly streamDelivery?: StreamDeliveryAdapter | null;
 }
 
 function setup(options: SetupOptions = {}): Harness {
@@ -55,6 +58,7 @@ function setup(options: SetupOptions = {}): Harness {
     browser,
     resolver: options.resolver ?? createDetectionItemResolver(detection),
     store,
+    ...(options.streamDelivery !== undefined && { streamDelivery: options.streamDelivery }),
     clock: () => 1000,
     random: () => 0,
     scheduleTimer: timer.schedule,
@@ -678,5 +682,136 @@ describe('background download runtime — event forwarding', () => {
     expect(snapshot.stats.active).toBe(1);
     expect(snapshot.health.hydrated).toBe(true);
     expect(snapshot.retries).toEqual([]);
+  });
+});
+
+describe('background download runtime — host access for stream downloads (§13.7)', () => {
+  /** An adapter that records what it was asked to assemble. */
+  function streamAdapter(): { adapter: StreamDeliveryAdapter; requested: string[] } {
+    const requested: string[] = [];
+    return {
+      requested,
+      adapter: {
+        supported: true,
+        handles: (url) => url.endsWith('.m3u8') || url.endsWith('.mpd'),
+        assemble: (request): Promise<StreamDelivery> => {
+          requested.push(request.manifestUrl);
+          return Promise.resolve({
+            url: 'blob:aetherdl/1',
+            byteLength: 8,
+            extension: 'ts',
+            mimeType: 'video/mp2t',
+            segmentCount: 1,
+            origins: ['https://cdn.test/*'],
+            release: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+  }
+
+  const stream = (url = 'https://cdn.test/hls/master.m3u8'): MediaItem =>
+    mediaItem({ id: url, url, kind: 'stream', delivery: 'hls' });
+
+  it('asks for the stream host before enqueueing, whatever started the download', async () => {
+    // This is the context-menu path: nothing has asked for a permission yet.
+    const delivery = streamAdapter();
+    const h = setup({ streamDelivery: delivery.adapter });
+    h.detect([stream()]);
+
+    await h.runtime.enqueue([stream().id]);
+    await flush();
+
+    expect([...h.fake.grantedOrigins]).toEqual(['https://cdn.test/*']);
+    const queue = await h.client.send('download/query', undefined);
+    expect(queue).toHaveLength(1);
+  });
+
+  it('does not ask again once the host is already granted', async () => {
+    const delivery = streamAdapter();
+    const h = setup({ streamDelivery: delivery.adapter });
+    h.fake.grantedOrigins.add('https://cdn.test/*');
+    h.fake.denyPermissions = true; // any request would now be refused
+    h.detect([stream()]);
+
+    await h.runtime.enqueue([stream().id]);
+    await flush();
+
+    const queue = await h.client.send('download/query', undefined);
+    expect(queue).toHaveLength(1);
+  });
+
+  it('reports a declined host and queues nothing for it', async () => {
+    const delivery = streamAdapter();
+    const h = setup({ streamDelivery: delivery.adapter });
+    const errors: AppError[] = [];
+    h.runtime.on('error', (error) => {
+      errors.push(error);
+    });
+    h.fake.denyPermissions = true;
+    h.detect([stream()]);
+
+    await h.runtime.enqueue([stream().id]);
+    await flush();
+
+    const queue = await h.client.send('download/query', undefined);
+    expect(queue).toEqual([]);
+    expect(delivery.requested).toEqual([]);
+    // The user is told which permission is missing, not left with a network error.
+    expect(errors.some((error) => error.code === 'download-stream-host-denied')).toBe(true);
+    expect(errors.some((error) => error.messageKey === 'error.permission.host')).toBe(true);
+  });
+
+  it('keeps the rest of a batch when one stream host is declined', async () => {
+    const delivery = streamAdapter();
+    const h = setup({ streamDelivery: delivery.adapter });
+    h.fake.denyPermissions = true;
+    const progressive = mediaItem({ id: 'clip', url: 'https://files.test/clip.mp4' });
+    h.detect([stream(), progressive]);
+
+    await h.runtime.enqueue([stream().id, 'clip']);
+    await flush();
+
+    const queue = (await h.client.send('download/query', undefined)) as readonly {
+      item: { id: string };
+    }[];
+    expect(queue.map((task) => task.item.id)).toEqual(['clip']);
+  });
+
+  it('drops an assembly document a previous worker generation left open', async () => {
+    // The service worker restarts; the offscreen document does not. Whatever it was
+    // holding is untracked from here on, so boot lets it go (§8.9, §12.1).
+    const delivery = streamAdapter();
+    const reset = vi.fn(() => Promise.resolve());
+    const h = setup({ streamDelivery: { ...delivery.adapter, reset } });
+
+    await h.runtime.ready();
+
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('boots even when dropping that document fails', async () => {
+    const delivery = streamAdapter();
+    const h = setup({
+      streamDelivery: {
+        ...delivery.adapter,
+        reset: () => Promise.reject(new Error('no such document')),
+      },
+    });
+
+    await expect(h.runtime.ready()).resolves.toBeUndefined();
+    const queue = await h.client.send('download/query', undefined);
+    expect(queue).toEqual([]);
+  });
+
+  it('asks for nothing at all when no stream is involved', async () => {
+    const delivery = streamAdapter();
+    const h = setup({ streamDelivery: delivery.adapter });
+    h.detect([mediaItem({ id: 'clip', url: 'https://files.test/clip.mp4' })]);
+
+    await h.runtime.enqueue(['clip']);
+    await flush();
+
+    expect([...h.fake.grantedOrigins]).toEqual([]);
   });
 });

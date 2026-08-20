@@ -37,6 +37,11 @@ export interface MediaCardLabels {
     readonly delivery: string;
   };
   readonly taskState: Readonly<Record<TaskState, string>>;
+  /**
+   * How each delivery type reads to a person. Without it the card printed the raw
+   * enum (`hls`, `media-source`), which is neither English nor translatable (§19.1).
+   */
+  readonly delivery?: Readonly<Record<string, string>>;
   readonly progressLabel: string;
 }
 
@@ -106,7 +111,12 @@ function facts(item: MediaItem, labels: MediaCardLabels, locale?: string): reado
   push(fields.host, item.originHost);
   push(fields.filename, item.filename);
   push(fields.codec, item.codec);
-  push(fields.delivery, item.delivery);
+  // Localized where the caller supplied wording; the raw value only as a last resort,
+  // which is still better than printing nothing.
+  push(
+    fields.delivery,
+    item.delivery === undefined ? undefined : (labels.delivery?.[item.delivery] ?? item.delivery),
+  );
   return list;
 }
 
