@@ -166,3 +166,41 @@ describe('core/storage settings repository', () => {
     expect(await repository.load()).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' });
   });
 });
+
+describe('core/settings service: concurrent updates', () => {
+  it('keeps both changes when two updates start before the first load resolves', async () => {
+    // Both would otherwise read the same base catalogue and the second write would
+    // drop the first one's change.
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const repository: SettingsRepository = {
+      load: async () => {
+        await gate;
+        return undefined;
+      },
+      save: () => Promise.resolve(),
+    };
+    const service = createSettingsService({ repository });
+
+    const first = service.update({ theme: 'dark' });
+    const second = service.update({ maxRetries: 7 });
+    release();
+    await first;
+    const settled = await second;
+
+    expect(settled.theme).toBe('dark');
+    expect(settled.maxRetries).toBe(7);
+    expect(await service.get()).toMatchObject({ theme: 'dark', maxRetries: 7 });
+  });
+
+  it('a rejected update does not block the next one', async () => {
+    const service = createSettingsService({
+      repository: { load: () => Promise.resolve(undefined), save: () => Promise.resolve() },
+    });
+
+    await expect(service.update({ maxRetries: 999 })).rejects.toThrow();
+    await expect(service.update({ maxRetries: 2 })).resolves.toMatchObject({ maxRetries: 2 });
+  });
+});

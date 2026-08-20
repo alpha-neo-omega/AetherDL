@@ -95,6 +95,20 @@ const VALIDATORS: Readonly<{
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[];
 
 /**
+ * Look up a validator by an UNTRUSTED key, own properties only.
+ *
+ * `VALIDATORS[key]` reaches `Object.prototype` for names that live there: a patch key
+ * of `constructor` or `toString` found a truthy function and was ACCEPTED as a
+ * setting, and `__proto__` or `hasOwnProperty` threw a raw TypeError instead of being
+ * reported as an unknown setting (§13.8).
+ */
+function validatorFor(key: string): ((candidate: unknown) => boolean) | undefined {
+  return Object.prototype.hasOwnProperty.call(VALIDATORS, key)
+    ? (VALIDATORS[key as keyof Settings] as (candidate: unknown) => boolean)
+    : undefined;
+}
+
+/**
  * Validate a user-supplied patch (§4.9). Unknown keys are rejected rather than
  * silently dropped, so a typo never looks like a successful save.
  */
@@ -113,8 +127,7 @@ export function validateSettingsPatch(patch: unknown): Result<Partial<Settings>,
     if (value === undefined) {
       continue;
     }
-    const validator = VALIDATORS[key as keyof Settings] as
-      ((candidate: unknown) => boolean) | undefined;
+    const validator = validatorFor(key);
     if (validator === undefined) {
       return err(
         new ValidationError(`Unknown setting "${key}"`, {
@@ -143,7 +156,12 @@ export function coerceSettings(stored: unknown): Settings {
   const result: Record<string, unknown> = {};
   for (const key of SETTING_KEYS) {
     const validator = VALIDATORS[key] as (candidate: unknown) => boolean;
-    result[key] = validator(record[key]) ? record[key] : DEFAULT_SETTINGS[key];
+    // Own properties only: a stored catalogue is untrusted, and a value inherited
+    // from a prototype is not a value the user set.
+    const stored_value = Object.prototype.hasOwnProperty.call(record, key)
+      ? record[key]
+      : undefined;
+    result[key] = validator(stored_value) ? stored_value : DEFAULT_SETTINGS[key];
   }
   return result as unknown as Settings;
 }

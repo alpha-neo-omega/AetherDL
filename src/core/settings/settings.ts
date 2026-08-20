@@ -63,6 +63,13 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
     return loading;
   };
 
+  /**
+   * Updates run one at a time. Two updates that both begin before the first load has
+   * resolved would otherwise read the same base catalogue, and the second write would
+   * drop the first one's change (§4.9 — a change the user made must not vanish).
+   */
+  let updating: Promise<unknown> = Promise.resolve();
+
   const persist = async (next: Settings): Promise<Settings> => {
     // The in-memory catalogue advances first so a failed write still leaves the
     // session consistent with what the user was told (§2.8 honest state).
@@ -90,8 +97,20 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
           ...(validated.error.context !== undefined && { context: validated.error.context }),
         });
       }
-      const base = await current();
-      return persist({ ...base, ...validated.value });
+      // Queue behind whatever is already applying, so the base is always the newest
+      // catalogue. A failed predecessor does not block the queue.
+      const run = updating.then(
+        async () => {
+          const base = await current();
+          return persist({ ...base, ...validated.value });
+        },
+        async () => {
+          const base = await current();
+          return persist({ ...base, ...validated.value });
+        },
+      );
+      updating = run.catch(() => undefined);
+      return run;
     },
 
     async reset(): Promise<Settings> {

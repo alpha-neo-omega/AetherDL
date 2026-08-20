@@ -175,3 +175,40 @@ describe('core/settings validation', () => {
     }
   });
 });
+
+describe('settings validation: an untrusted key is never a prototype member (§13.8)', () => {
+  it.each(['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf'])(
+    'rejects "%s" as an unknown setting',
+    (key) => {
+      // Regression: the validator table was indexed with an untrusted key, so names
+      // that live on Object.prototype found a truthy function. `constructor` and
+      // `toString` were ACCEPTED as settings and written to storage; `__proto__` and
+      // `hasOwnProperty` threw a raw TypeError instead of being reported.
+      const patch = JSON.parse(`{"${key}": 1}`) as unknown;
+
+      const result = validateSettingsPatch(patch);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.error.code).toBe('settings-unknown-key');
+    },
+  );
+
+  it('still accepts a real setting alongside nothing else', () => {
+    const result = validateSettingsPatch({ theme: 'dark' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value).toEqual({ theme: 'dark' });
+  });
+
+  it('coerces a stored catalogue without consulting the prototype', () => {
+    const stored = JSON.parse('{"__proto__": {"theme": "dark"}}') as unknown;
+
+    expect(coerceSettings(stored).theme).toBe(DEFAULT_SETTINGS.theme);
+  });
+});
