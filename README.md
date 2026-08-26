@@ -24,13 +24,14 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.4.0 — choose the quality; MPEG-TS streams join too, 2026-08-20.** Built on the 1.0.0
+**1.5.0 — media is found by its bytes, 2026-08-26.** Built on the 1.0.0
 stable release: per-tab media detection, downloads through the browser's own download manager
 with a durable queue, retry and pause/resume, settings, local history, popup and settings
 surfaces, and the optional context-menu and notification integrations. Then 1.1.0 added stream
 downloading, 1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the extension a real
-icon, 1.3.0 joined split-track fragmented-MP4 streams, and 1.4.0 lets the user pick a
-rendition and joins split-track MPEG-TS streams too.
+icon, 1.3.0 joined split-track fragmented-MP4 streams, 1.4.0 added a stream quality picker and
+joined split-track MPEG-TS streams, and 1.5.0 finds media that hides behind false file names —
+and rides out a host that rate-limits the download.
 
 1.1.0 added, at the Project Owner's direction:
 
@@ -67,7 +68,7 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
-### Finding media that hides (unreleased)
+### Finding media that hides (1.5.0)
 
 Some sites make their media hard to find on purpose. A real one serves its HLS playlist with a
 `.txt` extension as `text/plain`, its MPEG-TS segments as `.css` / `text/css`, and plays them

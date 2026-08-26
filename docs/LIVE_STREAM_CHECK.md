@@ -17,8 +17,8 @@
 
 | Field | Value |
 | --- | --- |
-| Executed | 2026-08-20 |
-| Product version | `1.4.0` |
+| Executed | 2026-08-26 (re-executed for `1.5.0`; first run 2026-08-20 at `1.4.0`) |
+| Product version | `1.5.0` |
 | Result | **9 cases, all passed** |
 | Command | `npm run test:live` |
 | Tools present | `ffmpeg` and `ffprobe` — so the decode cases ran rather than skipping |
@@ -60,6 +60,21 @@
 - **"Highest bandwidth" was a bad default.** The DASH ladder really does offer 4K at ~15 Mbps, and
   Apple's master ranks an AC-3 variant highest. This is the measurement behind the quality picker
   ([ADR-011](adr/011-stream-rendition-selection-and-remuxing.md)).
+
+## Re-executed at 1.5.0
+
+Content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)) changed how every one of
+these cases decides what a resource is, so the suite was run again against the same public streams:
+**9 cases, all passed**, with no change in any verdict. Apple's byte-range fMP4 with AC-3 and
+Akamai's DASH still mux into files that decode with no errors.
+
+Separately, and outside this suite, the sniffer was run against a **real disguised stream** supplied
+by a user: an HLS playlist served as `.txt` / `text/plain` whose MPEG-TS segments are served as
+`.css` / `text/css`. It identified the playlist as HLS and the segments as MPEG-TS, and the shipped
+extension detected the stream in a real Chromium. That host then rate-limited this machine —
+segment timings went 154 ms, 153 ms, 11.7 s, 43.9 s, and finally no answer at all — which is what
+motivated the segment-level retry and the `stream-host-throttled` refusal. The URL is not recorded
+here: it was shared privately.
 
 ## What is still NOT covered here
 

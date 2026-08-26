@@ -1,13 +1,15 @@
-# AetherDL 1.4.0 — Release Audit
+# AetherDL 1.5.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.4.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> against the `1.5.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
 > 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, split-track stream muxing in
-> 1.3.0, and — new in 1.4.0 — user-chosen stream renditions, MPEG-TS and packed-audio
-> demultiplexing, and the real-world conformance suite. Store submission
+> 1.3.0, user-chosen stream renditions with MPEG-TS and packed-audio demultiplexing in 1.4.0, and
+> — new in 1.5.0 — identifying media by its BYTES rather than by its file name, which is the first
+> feature in this project to perform a network read that no download asked for
+> ([ADR-012](adr/012-detection-time-content-probing.md)). Store submission
 > requires Owner-held credentials and is a gated manual step (§18.8); distribution is via official
 > stores only (§18.6, non-goal N17).
 >
@@ -18,29 +20,38 @@
 > were corrected, and the artifact rows below are always the archives of the version in the title.
 >
 > **What changed in this audit, and why it matters:** through `1.0.0` this document recorded that the
-> extension made no network call of its own. That is no longer true. Assembling a stream means
-> reading a playlist and its segments, so `1.1.0` performs exactly those GET requests, to the media
-> host, without credentials or cookies. The claim is rewritten below rather than left standing.
-> Nothing is ever **sent**: no analytics, telemetry, beacon, socket or report
-> ([ADR-010](adr/010-non-drm-stream-assembly.md)).
+> extension made no network call of its own. That has now been narrowed twice, and both narrowings
+> are stated rather than left to be discovered:
+>
+> - `1.1.0` — assembling a stream means reading a playlist and its segments, so the extension
+>   performs exactly those GET requests, to the media host, without credentials or cookies
+>   ([ADR-010](adr/010-non-drm-stream-assembly.md)).
+> - `1.5.0` — a resource the page itself fetched may be **identified** by reading at most its first
+>   kilobyte, because a host can name a playlist `.txt` and serve it as `text/plain`. This is the
+>   first read in this project that no download asked for. It holds **no host permission**, touches
+>   only URLs the page already loaded, and is capped per detection pass
+>   ([ADR-012](adr/012-detection-time-content-probing.md)).
+>
+> Nothing is ever **sent**: no analytics, telemetry, beacon, socket or report — permanent under
+> §14.1 and §25.3, and unchanged by either narrowing.
 
 ## 1. Build under audit
 
 | Field | Value |
 |---|---|
-| Version | `1.4.0` — the 1.1.0 stream feature set (ADR-010), three defect sweeps, the real icon set, split-track muxing (1.3.0), and rendition selection plus MPEG-TS/packed-audio re-packaging ([ADR-011](adr/011-stream-rendition-selection-and-remuxing.md)): the user picks the quality, and a split-track stream is joined whichever of the two containers it arrives in |
+| Version | `1.5.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Also: segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.4.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1201 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 55 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
-| Also executed, outside the gate | `npm run test:live` — the shipped parsers, selection and muxer against public test streams from Apple, Mux, Akamai and the DASH Industry Forum: **9 cases, all passed**. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
+| Executed at 1.5.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1249 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 59 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Also executed, outside the gate | `npm run test:live`, **re-run at 1.5.0** because sniffing changed how every case decides what a resource is: **9 cases, all passed**, no verdict changed. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.4.0-chrome.zip` | 138 643 | 20 | `9ad363f5455a7c047308f2ff1197138e4fbf1927933914d84b0529f88cc3ada2` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.4.0-firefox.zip` | 138 709 | 20 | `a6e97dc3ab157424cf775aa2e1d2d5efb7b3159c9d78a67a2ff46380daa9ab5c` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.5.0-chrome.zip` | 140 842 | 20 | `aa323a2712103a1565a5038d36851a99bce4bc4979bc3aebff9663e92766c933` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.5.0-firefox.zip` | 140 906 | 20 | `60b5435d7d341d9bc6df7d358badfdf41211d6c84ea9c1e733c4cc7e85afb336` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -252,11 +263,11 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1201 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1249 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
-validations, the security gate, packaging, and 55 browser e2e tests (Chromium and Firefox, including
+validations, the security gate, packaging, and 59 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 96.37 % statements, 91.13 % branches.
+`npm run test:coverage` (which `ci` does not run): 96.23 % statements, 90.80 % branches.
 
 Branch coverage is lower than at `1.3.0`, and the reason is worth stating rather than smoothing
 over: the new format code reads bytes one at a time behind a defensive fallback per read
@@ -265,6 +276,21 @@ over: the new format code reads bytes one at a time behind a defensive fallback 
 malformed PES, a reserved sampling rate, a truncated parameter set, an unreadable rendition,
 descriptors in a PMT, adaptation-only packets, a PES that spans packets, a 33-bit timestamp — each
 have a test that names them.
+
+`1.5.0` added 47 tests, and the ones worth naming are the ones that were wrong first. The sniffer is
+tested against the false positives a naive signature check produces — a lone `0x47`, arbitrary XML,
+an ADTS sync word with a reserved sample rate — because a sniffer that guesses is worse than one
+that declines. The probe is tested for what it REFUSES: page assets the browser loaded, resources
+too large to be a manifest, URLs already looked at, and anything past its per-pass budget. Two
+browser cases carry the feature end to end against a fixture that imitates a real disguising host,
+and the detection half runs with **no host permission granted**, which is the claim the fixture
+exists to test.
+
+The throttling case is recorded here because its first version passed while testing nothing: the
+fixture refused a segment once, and the download manager's own retry re-ran the whole assembly, so
+the test also passed with segment-level retry disabled. The fixture now refuses twice and the test
+asserts the job's queue attempt count is zero — verified to fail (attempt count 2) with the retry
+removed.
 
 `1.4.0` added 95 tests. Over rendition selection: a ladder, a ceiling that matches nothing, a
 ceiling that excludes everything, a pinned choice, a stale pinned choice, and a manifest that
@@ -362,6 +388,17 @@ Honest limits of this audit:
   stream (public examples keep audio inside the variant), a packed-audio rendition from a real
   packager, and any HEVC or E-AC-3 stream. Where these fail they fail with a stated reason rather
   than producing a broken file, because every refusal path is explicit.
+- **What identification costs, stated plainly.** During detection the extension now issues up to
+  eight small GETs to hosts the page has already contacted, without cookies or credentials and
+  without any host permission. A host therefore learns that a resource it had just served was read
+  again. That is a real, if narrow, privacy cost; it buys detection of media that is otherwise
+  invisible, and it is why this needed an ADR rather than a commit
+  ([ADR-012](adr/012-detection-time-content-probing.md)).
+- **A host can refuse to be downloaded from, and one did.** The site that motivated this work
+  throttles anonymous sequential reads — measured at 154 ms, 153 ms, 11.7 s, 43.9 s for the same
+  segment size, then no answer at all. AetherDL now retries at the segment with backoff and reports
+  rate-limiting as what it is, but it will not spoof a `Referer` or forge headers to get past an
+  access control (§3, §12.6). Where a host blocks, the honest outcome is a stated failure.
 - **Two real defects were found by pointing the shipped code at real manifests, and both are
   fixed.** An HLS `AUDIO` group whose default rendition has no `URI` means the variants carry that
   audio; reading any URI-bearing rendition as proof of a split track would have downloaded a
