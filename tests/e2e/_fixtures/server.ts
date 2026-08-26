@@ -50,6 +50,16 @@ export const HLS_LADDER = [
 /** Segments per rung; the total for a rung is this times its segment size. */
 export const HLS_LADDER_SEGMENTS = 2;
 
+/**
+ * The disguised stream: an HLS playlist served as `.txt` / `text/plain` whose MPEG-TS
+ * segments are served as `.css` / `text/css`.
+ *
+ * Copied from a real video host, which names its media this way so that anything
+ * matching on file extensions sees stylesheets instead of video. The bytes are the
+ * committed real transport stream, so only the naming is a lie.
+ */
+export const DISGUISED_SEGMENTS = 2;
+
 export function ladderTotalBytes(height: number): number {
   const rung = HLS_LADDER.find((entry) => entry.height === height);
   if (rung === undefined) {
@@ -72,6 +82,10 @@ export interface FixtureSite {
 export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Promise<FixtureSite> {
   const server: Server = createServer((request, response) => {
     const requested = (request.url ?? '/').split('?')[0] ?? '/';
+    // A media CDN answers any origin, which is what lets the extension identify a
+    // resource by its bytes WITHOUT holding a host permission (§13.7, ADR-012). The
+    // fixture reproduces that, so the e2e proves the claim rather than assuming it.
+    response.setHeader('access-control-allow-origin', '*');
 
     // A deliberately slow transfer, so queue, pause, resume and cancel behaviour can
     // be observed while a download is genuinely in flight.
@@ -120,6 +134,58 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
       response.writeHead(200, {
         'content-type': 'application/vnd.apple.mpegurl',
         'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    // The disguised stream (see DISGUISED_SEGMENTS): correct bytes, lying names.
+    if (requested === '/media/disguised/master.txt') {
+      const body = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-STREAM-INF:BANDWIDTH=2161044,RESOLUTION=160x120,CODECS="avc1.42c00d,mp4a.40.2"',
+        'index.txt',
+        '',
+      ].join('\n');
+      // text/plain, exactly as the real host serves it.
+      response.writeHead(200, {
+        'content-type': 'text/plain',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    if (requested === '/media/disguised/index.txt') {
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-TARGETDURATION:2',
+        '#EXT-X-PLAYLIST-TYPE:VOD',
+      ];
+      for (let index = 1; index <= DISGUISED_SEGMENTS; index += 1) {
+        lines.push('#EXTINF:1.000,', `seg-${String(index)}.css`);
+      }
+      lines.push('#EXT-X-ENDLIST', '');
+      const body = lines.join('\n');
+      response.writeHead(200, {
+        'content-type': 'text/plain',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    const disguised = /^\/media\/disguised\/seg-(\d+)\.css$/.exec(requested);
+    if (disguised !== null) {
+      const index = Number(disguised[1]);
+      if (index < 1 || index > DISGUISED_SEGMENTS) {
+        response.writeHead(404).end();
+        return;
+      }
+      // Real MPEG-TS bytes — the committed fixture — served as a stylesheet.
+      const body = readFileSync(join(root, 'media', 'split-ts', `v-${String(index)}.m2ts`));
+      response.writeHead(200, {
+        'content-type': 'text/css',
+        'content-length': String(body.byteLength),
       });
       response.end(body);
       return;

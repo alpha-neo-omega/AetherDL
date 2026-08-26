@@ -621,3 +621,112 @@ test.describe('AetherDL lets the user choose a stream quality in Chromium (§10.
     await popup.close();
   });
 });
+
+test.describe('AetherDL downloads a stream that hides behind its file names (ADR-012)', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  let extension: LoadedExtension;
+  let site: FixtureSite;
+  let stagedDir: string;
+
+  function stageWithLoopbackAccess(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'aetherdl-disguised-e2e-'));
+    cpSync(distDir('chrome'), dir, { recursive: true });
+    const manifestPath = join(dir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest['host_permissions'] = ['http://127.0.0.1/*'];
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    return dir;
+  }
+
+  test.beforeAll(async () => {
+    site = await startFixtureSite();
+    stagedDir = stageWithLoopbackAccess();
+    extension = await loadChromiumExtension(stagedDir);
+  });
+
+  test.afterAll(async () => {
+    await extension.close();
+    await site.close();
+    rmSync(stagedDir, { recursive: true, force: true });
+  });
+
+  test('saves it as .ts, because the bytes say MPEG-TS whatever the names say', async () => {
+    const popup = await extension.page('popup.html');
+
+    // Detection first, through the probe: the page never puts the playlist in its DOM.
+    await sendMessage(popup, {
+      type: 'detection/run',
+      payload: {
+        pageUrl: `${site.origin}/disguised.html`,
+        domSignals: [],
+        observedUrls: [],
+        observedResources: [
+          { url: `${site.origin}/media/disguised/master.txt`, initiatorType: 'fetch' },
+        ],
+      },
+    });
+
+    const tabId = await extension.worker.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tab?.id ?? -1;
+    });
+    const items = await until(
+      'the disguised stream to be detected',
+      () =>
+        sendMessage<readonly MediaItem[]>(popup, { type: 'detection/query', payload: { tabId } }),
+      (found) => found.some((item) => item.url.endsWith('/media/disguised/master.txt')),
+      20_000,
+    );
+    const stream = items.find((item) => item.url.endsWith('/media/disguised/master.txt'));
+    expect(stream?.delivery).toBe('hls');
+
+    await sendMessage(popup, {
+      type: 'download/enqueue',
+      payload: { itemIds: [stream?.id ?? ''] },
+    });
+
+    // The two committed MPEG-TS segments, served as `.css` — the saved file is exactly
+    // those bytes, and nothing about the disguise reaches the output.
+    const expected = [1, 2]
+      .map(
+        (index) =>
+          readFileSync(join(SITE_ROOT, 'media', 'split-ts', `v-${String(index)}.m2ts`)).byteLength,
+      )
+      .reduce((sum, bytes) => sum + bytes, 0);
+
+    const downloads = await until(
+      'the disguised stream to be saved',
+      () =>
+        extension.worker.evaluate(() =>
+          chrome.downloads.search({}).then((found) =>
+            found.map((item) => ({
+              state: item.state,
+              bytes: item.bytesReceived,
+              url: item.url,
+              filename: item.filename,
+            })),
+          ),
+        ),
+      (found: readonly NativeDownload[]) =>
+        found.some(
+          (item) =>
+            item.state === 'complete' && item.url.startsWith('blob:') && item.bytes === expected,
+        ),
+      60_000,
+    );
+    expect(
+      downloads.some((item) => item.state === 'complete' && item.bytes === expected),
+      'the saved bytes must be the segments themselves',
+    ).toBe(true);
+
+    const queue = await sendMessage<readonly DownloadTask[]>(popup, { type: 'download/query' });
+    const task = queue.find((entry) => entry.item.url.endsWith('/media/disguised/master.txt'));
+    expect(task?.state).toBe('completed');
+    // `.ts`, decided by the segments' first bytes — not `.css`, and not `.txt`.
+    expect(task?.filename.endsWith('.ts')).toBe(true);
+    expect(task?.filename).not.toContain('.css');
+    expect(task?.filename).not.toContain('.txt');
+    await popup.close();
+  });
+});

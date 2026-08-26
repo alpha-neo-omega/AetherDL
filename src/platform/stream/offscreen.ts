@@ -194,7 +194,10 @@ export function createOffscreenStreamDelivery(
 
   return {
     supported: offscreen !== undefined,
-    handles(url: string): boolean {
+    handles(url: string, kind?: 'hls' | 'dash'): boolean {
+      if (kind !== undefined) {
+        return true;
+      }
       const manifest = manifestTypeFromUrl(url);
       return manifest === 'hls' || manifest === 'dash';
     },
@@ -262,6 +265,8 @@ export function createOffscreenStreamDelivery(
             // context is the one that reads the manifest (§10.6).
             ...(request.renditionId !== undefined && { renditionId: request.renditionId }),
             ...(request.preference !== undefined && { preference: request.preference }),
+            // What detection concluded from the bytes; the URL may not say (ADR-012).
+            ...(request.kind !== undefined && { kind: request.kind }),
           },
           { timeoutMs: ASSEMBLE_TIMEOUT_MS },
         );

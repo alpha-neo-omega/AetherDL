@@ -26,6 +26,7 @@ import { createSettingsRepository } from '@core/storage/settings-repository';
 import { QUEUE_DATABASE_NAME, QUEUE_STORE_NAME } from '@core/storage/queue-repository';
 import { createBrowser } from '@platform/browser/factory';
 import { createHttpClient } from '@platform/http/service';
+import { createResourceProbe } from '@core/detection/probe/probe';
 import { createIndexedDbObjectStore } from '@platform/storage/indexeddb';
 import type { AppError } from '@shared/result';
 import { formatMessage } from '@shared/utils';
@@ -66,7 +67,17 @@ const history = createHistoryService({
 });
 
 const engine = createDetectionEngine();
-const detection = createBackgroundRuntime({ browser, engine });
+// One HTTP client for the background: the quality chooser reads manifests with it,
+// and the detection probe identifies resources with it. Both go through the single
+// network door (§13.10).
+const http = createHttpClient();
+const detection = createBackgroundRuntime({
+  browser,
+  engine,
+  // Identifies what a page fetched by reading its first bytes, so a stream a player
+  // loaded with script is detectable at all (§9.1, ADR-012).
+  probe: createResourceProbe({ http }),
+});
 detection.start();
 
 const downloads = createBackgroundDownloadRuntime({
@@ -82,7 +93,7 @@ const downloads = createBackgroundDownloadRuntime({
   getSettings: () => settings.get(),
   // Reads a manifest — and only a manifest — so the popup can offer the qualities a
   // stream actually has (§10.6). The same single network door every other read uses.
-  http: createHttpClient(),
+  http,
 });
 downloads.start();
 

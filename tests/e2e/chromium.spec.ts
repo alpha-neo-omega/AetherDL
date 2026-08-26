@@ -313,3 +313,95 @@ test.describe('AetherDL in Chromium', () => {
     await page.close();
   });
 });
+
+test.describe('AetherDL identifies a stream that hides behind its file names', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  let extension: LoadedExtension;
+  let site: FixtureSite;
+
+  test.beforeAll(async () => {
+    site = await startFixtureSite();
+    extension = await loadChromiumExtension();
+  });
+
+  test.afterAll(async () => {
+    await extension.close();
+    await site.close();
+  });
+
+  let disguisedReport: DetectionReport | undefined;
+
+  test('the content script reports what the page fetched, not just what is in the DOM', async () => {
+    // The fixture is shaped like the real video host that motivated this: the DOM
+    // holds nothing but a MediaSource-backed <video>, and the playlist is fetched by
+    // script under a `.txt` name and served as text/plain.
+    const page = await extension.context.newPage();
+    await stubMessaging(page);
+    await page.goto(`${site.origin}/disguised.html`);
+    await page.addScriptTag({ path: join(distDir('chrome'), 'content.js') });
+
+    const report = await until(
+      'the content script to report what the page fetched',
+      () => page.evaluate(() => (globalThis as ReportWindow).__adlReports?.at(-1)),
+      (value) => (value?.observedResources?.length ?? 0) > 0,
+      15_000,
+    );
+    disguisedReport = report;
+
+    const playlist = report?.observedResources?.find((resource) =>
+      resource.url.endsWith('/media/disguised/master.txt'),
+    );
+    expect(playlist, 'the fetched playlist must be reported').toBeDefined();
+    // The initiator is what survives the disguise: a stylesheet is loaded by the
+    // browser, a playlist is fetched by script.
+    expect(playlist?.initiatorType).toBe('fetch');
+    // Nothing downloadable is in the DOM at all — only a blob: URL.
+    const domUrls = (report?.domSignals ?? []).map(
+      (signal) => signal.currentSrc ?? signal.src ?? '',
+    );
+    expect(domUrls.every((url) => url === '' || url.startsWith('blob:'))).toBe(true);
+    await page.close();
+  });
+
+  test('the background identifies it by its bytes and detects the stream', async () => {
+    expect(disguisedReport, 'the report from the previous test').toBeDefined();
+    const popup = await extension.page('popup.html');
+    await popup.bringToFront();
+
+    await sendMessage<readonly MediaItem[]>(popup, {
+      type: 'detection/run',
+      payload: disguisedReport,
+    });
+
+    // The first pass sees nothing: the DOM has only a blob: URL. The stream appears
+    // once the probe has read the first bytes of the `.txt` and found `#EXTM3U`.
+    const items = await until(
+      'the probed stream to be detected',
+      () =>
+        extension.worker
+          .evaluate(async () => {
+            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            return tab?.id ?? -1;
+          })
+          .then((tabId) =>
+            sendMessage<readonly MediaItem[]>(popup, {
+              type: 'detection/query',
+              payload: { tabId },
+            }),
+          ),
+      (found) => found.some((item) => item.url.endsWith('/media/disguised/master.txt')),
+      20_000,
+    );
+
+    const stream = items.find((item) => item.url.endsWith('/media/disguised/master.txt'));
+    expect(stream?.kind).toBe('stream');
+    expect(stream?.delivery).toBe('hls');
+    expect(stream?.status).toBe('supported');
+    // The `.txt` extension is a lie and must not be shown or used to name a file.
+    expect(stream?.container).not.toBe('txt');
+    // NOTE: this extension holds no host permission for the fixture origin — the probe
+    // works because the host answers any origin, which is the claim being proven.
+    await popup.close();
+  });
+});

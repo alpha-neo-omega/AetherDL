@@ -78,9 +78,14 @@ function lowercaseHeaders(headers: Headers): Readonly<Record<string, string>> {
  * Read the body with the ceiling enforced as it arrives, so an oversized resource is
  * abandoned mid-stream instead of after it has already been held in memory.
  */
-async function readBounded(response: Response, maxBytes: number, url: string): Promise<Uint8Array> {
+async function readBounded(
+  response: Response,
+  maxBytes: number,
+  url: string,
+  truncate = false,
+): Promise<Uint8Array> {
   const declared = response.headers.get('content-length');
-  if (declared !== null && Number(declared) > maxBytes) {
+  if (!truncate && declared !== null && Number(declared) > maxBytes) {
     throw new HttpError(
       `Response declares ${declared} bytes, over the ${String(maxBytes)} ceiling`,
       {
@@ -94,6 +99,9 @@ async function readBounded(response: Response, maxBytes: number, url: string): P
   const body = response.body;
   if (body === null) {
     const buffer = new Uint8Array(await response.arrayBuffer());
+    if (truncate) {
+      return buffer.subarray(0, maxBytes);
+    }
     if (buffer.byteLength > maxBytes) {
       throw new HttpError('Response exceeded the size ceiling', {
         code: 'http-too-large',
@@ -115,7 +123,14 @@ async function readBounded(response: Response, maxBytes: number, url: string): P
     if (value !== undefined) {
       total += value.byteLength;
       if (total > maxBytes) {
+        // Cancel before returning either way: an abandoned reader leaves the
+        // connection half-open in a service worker.
         await reader.cancel();
+        if (truncate) {
+          chunks.push(value.subarray(0, value.byteLength - (total - maxBytes)));
+          total = maxBytes;
+          break;
+        }
         throw new HttpError('Response exceeded the size ceiling', {
           code: 'http-too-large',
           messageKey: 'error.network',
@@ -197,7 +212,7 @@ export function createHttpClient(deps: HttpClientDeps = {}): HttpClient {
         });
       }
 
-      const bytes = await readBounded(response, maxBytes, url);
+      const bytes = await readBounded(response, maxBytes, url, options?.truncate === true);
       return {
         status: response.status,
         ok: true,

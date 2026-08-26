@@ -9,6 +9,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Media is identified by its bytes, not by its name.** A real video-hosting site serves its HLS
+  playlist with a `.txt` extension as `text/plain`, its MPEG-TS segments as `.css` / `text/css`, and
+  plays them through MediaSource so the DOM shows only `<video src="blob:…">`. Nothing downloadable
+  appeared anywhere AetherDL looked, and every gate that read a file extension got the answer the
+  host intended. Three changes, in the order they matter:
+  - `shared/utils/sniff` decides what bytes are — `#EXTM3U`, `<MPD`, `0x47` at 188-byte strides,
+    `ftyp`/`styp`/`moof` — and nothing about a URL or a `Content-Type` can override it.
+  - The content script reports what the page **fetched**, read from the page's own Resource Timing
+    timeline. No request is made to obtain that, nothing is intercepted, and the page is not
+    touched. `initiatorType` comes with it, because a playlist fetched by script cannot pretend to
+    be a stylesheet the browser loaded.
+  - The background reads at most the **first kilobyte** of a few of those resources and reports the
+    MIME the bytes imply. That is a network read no download asked for, so it is recorded as an
+    amendment rather than slipped in: [ADR-012](docs/adr/012-detection-time-content-probing.md),
+    PROJECT_BIBLE §14.3. It holds **no host permission** — it works because such hosts answer any
+    origin, and where one does not it fails and detection is no worse than before. It reads only
+    URLs the page already loaded; it never constructs one.
+- **`context.networkResources` finally has a producer.** The `network-media` detector and the
+  manifest detector's network branch have been unreachable code since they were written, waiting
+  for an observer that was never built. They now fire, unchanged, because the probe reports a
+  truthful MIME instead of a special case.
+
+### Fixed
+
+- **A container was chosen by file extension, so mislabelled segments produced a wrongly named
+  file.** MPEG-TS served as `.css` was saved as `.mp4`; fragmented MP4 named `.ts` would have been
+  fed to the transport-stream demuxer. The container is now decided by the bytes that were
+  actually fetched (`core/download/stream/assemble.ts`).
+- **Detection reported a container it had invented.** Any URL extension was copied onto the item —
+  `container: 'txt'` for a playlist — and that fed the saved filename. Only a known media extension
+  counts now; the metadata extractor's own contract says it never fabricates values
+  (`core/detection/metadata/metadata.ts`).
+- **The download path re-decided what detection had already established.** A playlist served as
+  `.txt` was detected correctly and then refused by the assembler as "not a manifest", because that
+  gate read the URL. The detected kind now travels with the job through the offscreen boundary into
+  assembly.
+
+### Changed
+
+- `HttpRequestOptions.truncate` reads a prefix and stops, instead of refusing an oversized response.
+  Identification needs the first bytes of a resource whose size is unknown, and a `Range` request
+  cannot be used for it: `Range` is not CORS-safelisted, so cross-origin it forces a preflight many
+  hosts do not answer, and a host that ignores it answers `200` with the whole body. Measured
+  against the real host before choosing. **Assembly must never set it** — a truncated segment
+  written into an output file would be silent corruption.
+- Detection runs in **two passes** when a page fetched anything worth identifying: what the DOM
+  shows is committed and broadcast first, and a second pass follows only if probing added something.
+  The 300 ms detection budget never waits on a third-party host.
+- A stream is reported as its manifest, not as its segments: once a playlist is identified the
+  pieces it lists are suppressed, so one video cannot fill the popup with 331 fragments of itself.
+
+### Verification
+
+`npm run ci` exits 0. Beyond the unit tests for each piece, the whole chain is proven end to end in
+a real Chromium against a fixture built to imitate the real site — an HLS playlist served as
+`.txt` / `text/plain` whose MPEG-TS segments are served as `.css` / `text/css`, behind a page whose
+DOM contains only a blob-backed `<video>`:
+
+- the shipped content script reports the fetched playlist with `initiatorType: 'fetch'`, and nothing
+  but a `blob:` URL in the DOM;
+- the background identifies it by its bytes and detects an HLS stream — **with no host permission**,
+  which is the claim the fixture exists to test, since it answers any origin exactly as the real
+  host does;
+- the stream downloads and is saved as `.ts`, matching the committed segments byte for byte, with
+  neither `.txt` nor `.css` reaching the filename.
+
+The sniffer was also run against the real site's actual playlist and segments before any of this was
+designed: `.txt` → HLS, `.css` → MPEG-TS.
+
+### Also changed
+
+- **A slow segment no longer discards a whole download.** Measured against a real host that
+  throttles anonymous sequential reads, the same segment size went from 150 ms to 44 seconds as a
+  download progressed — past the 30 s client default, which failed the job and threw away everything
+  already fetched. Segments now get a 120 s budget and up to three attempts, retried where the
+  failure is a transport failure and never where it is a refusal that a second attempt cannot
+  change. Retried at the segment, not by the queue: the queue's retry restarts assembly from the
+  first segment, which on a 331-segment stream turns one hiccup into hours of refetching.
+- What AetherDL will **not** do about such a host: spoof a `Referer`, forge headers, or otherwise
+  alter requests to get past an access control. That is forbidden outright (§3, §12.6) and is the
+  line between a downloader and a bypass tool. A host that throttles anonymous reads is exercising
+  its own choice, and the honest outcome is a slow download or a stated failure.
+
+### Known limitations
+
+- Identification only works where a host answers any origin (`Access-Control-Allow-Origin: *`).
+  A host that does not is not identified, and adding a host permission to change that is forbidden
+  (§13.3, ADR-012).
+- Only what the page fetched **before** the content script was injected — which happens when the
+  popup is opened — is in the timeline, and a busy page can push early entries out of the browser's
+  resource-timing buffer. Reloading with the popup opened once is the reliable path.
+- A resource larger than 2 MiB is assumed to be media rather than a manifest and is not identified.
+- Nothing here helps a site whose media is DRM-protected; that remains refused by design.
+
 ## [1.4.0] — Choose the quality; MPEG-TS streams join too
 
 ### Added

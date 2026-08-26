@@ -7,13 +7,15 @@
  * Dependencies: none.
  * Public API: assertNever, isDefined, plus the event system (./events), URL
  *          helpers (./url), media helpers (./media), presentation formatters
- *          (./format) and message resolution (./messages) re-exported below.
+ *          (./format), message resolution (./messages) and content sniffing
+ *          (./sniff) re-exported below.
  */
 export * from './events';
 export * from './url';
 export * from './media';
 export * from './format';
 export * from './messages';
+export * from './sniff';
 
 /**
  * Exhaustiveness helper for discriminated unions (PROJECT_BIBLE.md §15.1). Calling

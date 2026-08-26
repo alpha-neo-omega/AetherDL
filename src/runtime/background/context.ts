@@ -6,11 +6,13 @@
  *          shape to the core input; the engine is used exactly as implemented.
  * Restrictions: Runtime layer — pure mapping/validation; no browser globals. Bounds
  *          untrusted input (caps counts) and drops malformed signals.
- * Public API: MAX_SIGNALS, MAX_URLS, isDetectionReport, buildDetectionContext.
+ * Public API: MAX_SIGNALS, MAX_URLS, MAX_RESOURCES, isDetectionReport,
+ *          buildDetectionContext, observedResourcesFrom.
  */
-import { MAX_DOM_SIGNALS, MAX_OBSERVED_URLS } from '@shared/constants';
+import { MAX_DOM_SIGNALS, MAX_OBSERVED_RESOURCES, MAX_OBSERVED_URLS } from '@shared/constants';
 import type { DetectionReport, WireDomSignal } from '@shared/types';
 import type { DetectionContext, DomSignal, DomSignalRole } from '@core/detection/pipeline';
+import type { ObservedResource } from '@core/detection/probe';
 
 /**
  * Upper bounds on untrusted collections (defense in depth, §13.8). The same numbers
@@ -19,6 +21,10 @@ import type { DetectionContext, DomSignal, DomSignalRole } from '@core/detection
  */
 export const MAX_SIGNALS = MAX_DOM_SIGNALS;
 export const MAX_URLS = MAX_OBSERVED_URLS;
+export const MAX_RESOURCES = MAX_OBSERVED_RESOURCES;
+
+/** An initiator name is a short enum-like token; anything longer is not one. */
+const MAX_INITIATOR_LENGTH = 32;
 
 /**
  * Validate the top-level shape of an untrusted `detection/run` payload (§13.8).
@@ -37,6 +43,10 @@ export function isDetectionReport(value: unknown): value is DetectionReport {
 }
 
 const ROLES: ReadonlySet<string> = new Set<DomSignalRole>(['video', 'audio', 'source', 'link']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
@@ -105,6 +115,42 @@ function toDomSignal(value: unknown, pageUrl: string): DomSignal | undefined {
     ...(raw.mediaSource === true && { mediaSource: true }),
     ...(raw.encrypted === true && { encrypted: true }),
   };
+}
+
+/**
+ * The resources a report claims the page fetched, validated at the trust boundary
+ * (§13.8) and capped.
+ *
+ * Kept separate from {@link buildDetectionContext} because identifying these means
+ * making requests, which is asynchronous and belongs to the runtime — not to a pure
+ * context builder (§8.1, ADR-012). A URL that will not resolve against the page is
+ * dropped here rather than probed.
+ */
+export function observedResourcesFrom(
+  report: DetectionReport,
+  pageUrl: string,
+): readonly ObservedResource[] {
+  const raw = Array.isArray(report.observedResources) ? report.observedResources : [];
+  const out: ObservedResource[] = [];
+  for (const entry of raw.slice(0, MAX_RESOURCES)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const url = str(entry['url']);
+    const resolved = url === undefined ? undefined : resolveAgainst(url, pageUrl);
+    if (resolved === undefined || !/^https?:\/\//i.test(resolved)) {
+      continue;
+    }
+    const initiator = str(entry['initiatorType']);
+    const size = num(entry['sizeBytes']);
+    out.push({
+      url: resolved,
+      ...(initiator !== undefined &&
+        initiator.length <= MAX_INITIATOR_LENGTH && { initiatorType: initiator.toLowerCase() }),
+      ...(size !== undefined && size > 0 && { sizeBytes: size }),
+    });
+  }
+  return out;
 }
 
 /**

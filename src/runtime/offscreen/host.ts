@@ -56,6 +56,7 @@ function readRequest(payload: unknown): StreamAssembleRequest | undefined {
   const requestId = record['requestId'];
   const renditionId = record['renditionId'];
   const preference = record['preference'];
+  const kind = record['kind'];
   return {
     manifestUrl,
     ...(typeof maxTotalBytes === 'number' && maxTotalBytes > 0 && { maxTotalBytes }),
@@ -64,6 +65,7 @@ function readRequest(payload: unknown): StreamAssembleRequest | undefined {
     // Validated against the ratified vocabulary rather than trusted: this arrives
     // over a message boundary (§13.8), and an unknown value must not reach selection.
     ...(isQualityPreference(preference) && { preference }),
+    ...((kind === 'hls' || kind === 'dash') && { kind }),
   };
 }
 
@@ -123,6 +125,7 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
         ...(request.maxTotalBytes !== undefined && { maxTotalBytes: request.maxTotalBytes }),
         ...(request.renditionId !== undefined && { renditionId: request.renditionId }),
         ...(request.preference !== undefined && { preference: request.preference }),
+        ...(request.kind !== undefined && { kind: request.kind }),
         onProgress: (progress): void => {
           void bus.broadcast(STREAM_PROGRESS_BROADCAST, {
             manifestUrl: request.manifestUrl,

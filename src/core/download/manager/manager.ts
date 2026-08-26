@@ -176,9 +176,20 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
 
   const streamsSupported = deps.streamDelivery?.supported === true;
 
+  /**
+   * What detection concluded this item is, where that is a stream.
+   *
+   * Carried explicitly because a manifest's URL can be made to say anything: a real
+   * host serves its playlist as `.txt`, and detection identified it from its bytes
+   * (§9.1, ADR-012). Without this the download path would re-decide from the name and
+   * refuse what detection had already established.
+   */
+  const streamKindOf = (item: MediaItem): 'hls' | 'dash' | undefined =>
+    item.delivery === 'hls' || item.delivery === 'dash' ? item.delivery : undefined;
+
   /** Whether this job's source is a manifest this build can assemble (§10.6). */
   const isStreamJob = (item: MediaItem): boolean =>
-    streamsSupported && deps.streamDelivery?.handles(item.url) === true;
+    streamsSupported && deps.streamDelivery?.handles(item.url, streamKindOf(item)) === true;
 
   const validate = (item: MediaItem): ReturnType<typeof validateDownloadable> =>
     validateDownloadable(item, { allowStreams: streamsSupported });
@@ -497,6 +508,9 @@ export function createDownloadManager(deps: DownloadManagerDeps): DownloadManage
       const delivery = await adapter.assemble({
         manifestUrl: job.item.url,
         signal: controller.signal,
+        ...(streamKindOf(job.item) !== undefined && {
+          kind: streamKindOf(job.item) as 'hls' | 'dash',
+        }),
         // What quality to fetch: the job's own pinned rendition first, else whatever
         // the current preference resolves to (§10.6).
         ...(job.streamRenditionId !== undefined && { renditionId: job.streamRenditionId }),

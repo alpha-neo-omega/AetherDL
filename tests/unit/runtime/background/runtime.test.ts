@@ -4,6 +4,9 @@ import { createMessageBus } from '@platform/messaging/service';
 import { createBackgroundRuntime } from '@runtime/background/runtime';
 import { createFakeWebExt, type FakeWebExt } from '../../platform/_fake-webext';
 import { createFakeEngine, mediaItem, report, type FakeEngine } from '../_fixtures';
+import type { DetectionReport, MediaItem } from '@shared/types';
+import type { NetworkResource } from '@core/detection/pipeline';
+import type { ObservedResource, ResourceProbe } from '@core/detection/probe';
 
 interface Harness {
   readonly fake: FakeWebExt;
@@ -377,5 +380,193 @@ describe('background detection runtime', () => {
     fake.onActivated.trigger({ tabId: 1, windowId: 1 });
     expect(runtime.state.activeTabId()).toBeUndefined();
     client.dispose();
+  });
+});
+
+describe('background detection runtime — identifying what the page fetched (ADR-012)', () => {
+  const PAGE = 'https://site.test/watch';
+  const PLAYLIST = 'https://cdn.test/media/abc.txt';
+
+  /** A probe that answers with whatever it was told, and records what it was asked. */
+  function fakeProbe(results: readonly NetworkResource[]): {
+    readonly probe: ResourceProbe;
+    readonly asked: ObservedResource[][];
+    readonly forgotten: () => number;
+  } {
+    const asked: ObservedResource[][] = [];
+    let forgotten = 0;
+    return {
+      asked,
+      forgotten: () => forgotten,
+      probe: {
+        identify: (resources) => {
+          asked.push([...resources]);
+          return Promise.resolve(results);
+        },
+        forget: () => {
+          forgotten += 1;
+        },
+      },
+    };
+  }
+
+  function setupWithProbe(probe: ResourceProbe): Harness {
+    const fake = createFakeWebExt();
+    const browser = createBrowserFrom(fake.api, 'chrome');
+    const engine = createFakeEngine();
+    const runtime = createBackgroundRuntime({
+      browser,
+      engine: engine.manager,
+      clock: () => 1000,
+      probe,
+    });
+    runtime.start();
+    return { fake, engine, runtime, client: createMessageBus(fake.api) };
+  }
+
+  const fetchedReport = (): DetectionReport =>
+    report({
+      pageUrl: PAGE,
+      observedResources: [{ url: PLAYLIST, initiatorType: 'fetch' }],
+    });
+
+  /** Drive a report in through the message bus, as the content script does. */
+  const send = async (h: Harness): Promise<readonly MediaItem[]> => {
+    h.fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    return h.client.send('detection/run', fetchedReport());
+  };
+
+  it('commits the DOM result BEFORE any request is made', async () => {
+    // Detection latency is a budget (§12.1). A page whose media is only discoverable
+    // by probing must not delay the result for a page whose media is in the DOM, so
+    // the first pass never waits on the network.
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = () => {
+        resolve();
+      };
+    });
+    const slow: ResourceProbe = {
+      identify: async () => {
+        await gate;
+        return [];
+      },
+      forget: () => undefined,
+    };
+    const h = setupWithProbe(slow);
+    h.engine.setItems([mediaItem({ id: 'dom-item' })]);
+
+    const items = await send(h);
+
+    expect(items.map((item) => item.id)).toStrictEqual(['dom-item']);
+    release();
+  });
+
+  it('re-runs detection when the probe identifies something new', async () => {
+    const identified: NetworkResource[] = [
+      { url: PLAYLIST, mimeType: 'application/vnd.apple.mpegurl', statusCode: 200 },
+    ];
+    const asked: ObservedResource[][] = [];
+    let letProbeAnswer = (): void => undefined;
+    const answered = new Promise<void>((resolve) => {
+      letProbeAnswer = () => {
+        resolve();
+      };
+    });
+    const probe: ResourceProbe = {
+      identify: async (resources) => {
+        asked.push([...resources]);
+        await answered;
+        return identified;
+      },
+      forget: () => undefined,
+    };
+    const h = setupWithProbe(probe);
+    h.engine.setItems([]);
+
+    await send(h);
+    // The first pass found nothing in the DOM; only now does the probe answer, and
+    // the stream becomes detectable.
+    h.engine.setItems([mediaItem({ id: 'stream', kind: 'stream' })]);
+    letProbeAnswer();
+    await flush();
+    await flush();
+
+    // What the probe was handed is exactly what the page reported fetching.
+    expect(asked[0]?.map((resource) => resource.url)).toStrictEqual([PLAYLIST]);
+    // The enriched context carries the identified resource into the engine.
+    const enriched = h.engine.contexts[h.engine.contexts.length - 1];
+    expect(enriched?.networkResources).toStrictEqual(identified);
+    expect(h.runtime.state.getItems(7).map((item) => item.id)).toStrictEqual(['stream']);
+  });
+
+  it('does not re-run when the probe finds nothing', async () => {
+    const probe = fakeProbe([]);
+    const h = setupWithProbe(probe.probe);
+    h.engine.setItems([mediaItem({ id: 'dom-item' })]);
+
+    await send(h);
+    await flush();
+    await flush();
+
+    // One detection pass, not two: an unchanged context is not worth re-running.
+    expect(h.engine.contexts).toHaveLength(1);
+  });
+
+  it('makes no request at all when the page reported nothing it fetched', async () => {
+    const probe = fakeProbe([{ url: PLAYLIST, mimeType: 'video/mp4' }]);
+    const h = setupWithProbe(probe.probe);
+    h.engine.setItems([]);
+
+    h.fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    await h.client.send('detection/run', report({ pageUrl: PAGE }));
+    await flush();
+
+    expect(probe.asked).toStrictEqual([]);
+  });
+
+  it('discards an enrichment whose tab has navigated away', async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = () => {
+        resolve();
+      };
+    });
+    const slow: ResourceProbe = {
+      identify: async () => {
+        await gate;
+        return [{ url: PLAYLIST, mimeType: 'application/vnd.apple.mpegurl' }];
+      },
+      forget: () => undefined,
+    };
+    const h = setupWithProbe(slow);
+    h.engine.setItems([mediaItem({ id: 'old-page' })]);
+
+    await send(h);
+    // The user navigates while the probe is still in flight.
+    h.fake.onUpdated.trigger(
+      7,
+      {},
+      { id: 7, url: 'https://site.test/other', active: true, windowId: 1 },
+    );
+    release();
+    await flush();
+    await flush();
+
+    // The stale result must not resurrect the previous page's media (§10.2).
+    expect(h.runtime.state.getItems(7)).toStrictEqual([]);
+  });
+
+  it('forgets what it identified when the tab navigates', async () => {
+    const probe = fakeProbe([]);
+    const h = setupWithProbe(probe.probe);
+
+    h.fake.onUpdated.trigger(
+      7,
+      {},
+      { id: 7, url: 'https://site.test/next', active: true, windowId: 1 },
+    );
+
+    expect(probe.forgotten()).toBeGreaterThan(0);
   });
 });

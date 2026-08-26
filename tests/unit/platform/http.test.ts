@@ -262,3 +262,65 @@ describe('platform/http: cancellation and ceilings', () => {
     expect(DEFAULT_MAX_RESPONSE_BYTES).toBeLessThanOrEqual(256 * 1024 * 1024);
   });
 });
+
+describe('platform/http truncating reads (§9.1, ADR-012)', () => {
+  it('returns the prefix instead of refusing an oversized response', async () => {
+    // Identification needs the first bytes of a resource whose size is unknown, and a
+    // `Range` request cannot be used cross-origin without a preflight many hosts do
+    // not answer. So the client stops reading instead.
+    const body = new Uint8Array(4096).fill(0x41);
+    const client = createHttpClient({
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(body, { status: 200, headers: { 'content-length': String(body.length) } }),
+        ),
+    });
+
+    const response = await client.get('https://cdn.test/big.bin', {
+      maxBytes: 1024,
+      truncate: true,
+    });
+
+    expect(response.bytes.byteLength).toBe(1024);
+    expect(response.status).toBe(200);
+  });
+
+  it('still refuses an oversized response when truncation was not asked for', async () => {
+    // Assembly depends on this: a truncated segment written into an output file would
+    // be silent corruption.
+    const body = new Uint8Array(4096);
+    const client = createHttpClient({
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(body, { status: 200, headers: { 'content-length': String(body.length) } }),
+        ),
+    });
+
+    await expect(client.get('https://cdn.test/big.bin', { maxBytes: 1024 })).rejects.toMatchObject({
+      code: 'http-too-large',
+    });
+  });
+
+  it('truncates a streamed body mid-chunk without leaving the reader open', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600).fill(1));
+        controller.enqueue(new Uint8Array(600).fill(2));
+        controller.close();
+      },
+    });
+    const client = createHttpClient({
+      fetchImpl: () => Promise.resolve(new Response(stream, { status: 200 })),
+    });
+
+    const response = await client.get('https://cdn.test/streamed.bin', {
+      maxBytes: 1000,
+      truncate: true,
+    });
+
+    expect(response.bytes.byteLength).toBe(1000);
+    // The boundary lands inside the second chunk, and the bytes kept are the real ones.
+    expect(response.bytes[599]).toBe(1);
+    expect(response.bytes[600]).toBe(2);
+  });
+});

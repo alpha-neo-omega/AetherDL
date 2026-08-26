@@ -67,6 +67,27 @@ ever read, followed, logged or returned. There is no decryption code in this pro
 will not be ([PROJECT_BIBLE.md §6](PROJECT_BIBLE.md#6-unsupported-content),
 [PROJECT_BIBLE.md §24 ADR-005](PROJECT_BIBLE.md#24-architecture-decision-records-adrs)).
 
+### Finding media that hides (unreleased)
+
+Some sites make their media hard to find on purpose. A real one serves its HLS playlist with a
+`.txt` extension as `text/plain`, its MPEG-TS segments as `.css` / `text/css`, and plays them
+through MediaSource so the page itself only ever shows `blob:`. Nothing downloadable appears in the
+DOM, and every check that reads a file extension gets the answer the host wants it to get.
+
+AetherDL now decides what a resource is from its **bytes**: `#EXTM3U` is a playlist whatever it is
+called, and a segment whose first byte is `0x47` is MPEG-TS and is saved as `.ts`. To find those
+bytes at all, the extension reads what the page itself fetched — from the page's own performance
+timeline, which costs no request — and then reads at most the first kilobyte of a handful of those
+resources to see what they are.
+
+That last part is a network read that no download asked for, so it is written down rather than
+slipped in: [ADR-012](docs/adr/012-detection-time-content-probing.md) and
+[PROJECT_BIBLE.md §14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension). It holds
+**no host permission** — it works because these hosts answer any origin, and where one does not, it
+simply fails and detection is no worse than before. It reads only URLs the page already loaded,
+never a URL it constructs. And it still **sends nothing**: no analytics, no telemetry, no beacon,
+no account, no backend.
+
 ### Choosing a quality (1.4.0)
 
 A stream is not one file — it is the same media at several sizes — and until 1.4.0 the download

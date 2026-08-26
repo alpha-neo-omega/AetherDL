@@ -118,6 +118,13 @@ AetherDL finds the media on the page you are already looking at and downloads it
   past 1 GiB and is not resumable, and **Firefox 115–127 cannot download streams at all** because
   the permission key AetherDL uses to ask for host access at the moment you click arrived in
   Firefox 128.
+- Identifies media by its **content**, not by its file name. Some sites serve a video playlist with
+  a `.txt` extension and its segments as `.css`, so that tools matching on names see text files.
+  AetherDL reads the first kilobyte of what a page fetched and decides from the bytes. This means
+  the extension makes a small number of read-only `GET` requests during detection, to hosts the page
+  itself has already contacted, without cookies or credentials and without any host permission
+  (PROJECT_BIBLE.md §14.3, docs/adr/012-detection-time-content-probing.md). Nothing is ever
+  transmitted: no analytics, no telemetry, no accounts, no backend.
 - Shows what it found before you commit: title, type, kind, resolution, duration, quality and
   source host. A field it cannot determine is left off the card rather than guessed
   (PROJECT_BIBLE.md §4.2). **Do not claim a file size**: size reaches a card only through network

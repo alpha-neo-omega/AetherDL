@@ -459,6 +459,7 @@ Consumers, Lifecycle, Restrictions. Public interface names restate contracts fro
 | `core/download/progress` | Progress derivation + throttling. | progress events | `manager`, UI | Per task |
 | `core/download/filename` | Deterministic filename generation. | filename generator | `manager` | Per task |
 | `core/download/stream` | Non-DRM HLS/DASH assembly: playlist/manifest parsing, rendition selection, MPEG-TS and packed-audio demultiplexing, fragmented-MP4 writing and muxing. | assembler, rendition list | `manager` | Per stream task |
+| `core/detection/probe` | Identifies a resource the page fetched by reading its first bytes, through the injected HTTP port ([ADR-012](docs/adr/012-detection-time-content-probing.md)). | resource probe | background detection runtime | Per tab, in memory |
 | `core/history` | Local history store & policy. | history repository/service | UI, `download/manager` | Durable |
 | `core/settings` | Settings schema, defaults, validation. | settings service | All surfaces | Durable |
 | `core/query` | Filter/sort/search engine. | query functions | UI | Per query |
@@ -747,6 +748,24 @@ Deterministic generation from a template with tokens (`{title}`, `{host}`, `{ext
 Delegated to the browser conflict action (`uniquify` by default) so files never silently overwrite;
 normalized across targets in `platform/downloads`
 ([PROJECT_BIBLE.md §10.7](PROJECT_BIBLE.md#107-filename-generation)).
+
+### 9.7b Identifying Media by Its Bytes
+
+A modern player fetches its playlist with script and feeds MediaSource, so the DOM holds only a
+`blob:` URL; and hosts serve playlists and segments under names that lie (`.txt` for an HLS
+playlist, `.css` for MPEG-TS segments). Detection therefore has a second input beyond the DOM
+([PROJECT_BIBLE.md §12.6](PROJECT_BIBLE.md#126-network-observation-and-detection-probing),
+[ADR-012](docs/adr/012-detection-time-content-probing.md)):
+
+1. `runtime/content` reads the page's own Resource Timing timeline — no request, no interception —
+   and reports what the page fetched, carrying `initiatorType`, which a disguise cannot fake.
+2. `core/detection/probe` reads at most the first kilobyte of a few of those resources through the
+   single HTTP port, holding no host permission, and reports the MIME the BYTES imply.
+3. `shared/utils/sniff` is the one place that decides what bytes are; `core/download/stream` uses
+   the same module to choose a container, so the saved file is named after what it actually is.
+
+Detection commits the DOM-derived result before any of this, and re-runs only if probing added
+something: the detection-latency budget never waits on a third-party host.
 
 ### 9.8 Stream Assembly (Non-DRM)
 

@@ -19,6 +19,14 @@ export interface StreamAssemblyProgressReport {
 
 export interface StreamDeliveryRequest {
   readonly manifestUrl: string;
+  /**
+   * What detection already established this manifest is, when the URL does not say.
+   *
+   * A host may serve its playlist as `.txt`; detection identified it from its bytes
+   * (§9.1, ADR-012), and that conclusion must reach assembly or the URL's lie decides
+   * again here.
+   */
+  readonly kind?: 'hls' | 'dash';
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: StreamAssemblyProgressReport) => void;
   readonly maxTotalBytes?: number;
@@ -45,8 +53,12 @@ export interface StreamDelivery {
 export interface StreamDeliveryAdapter {
   /** Whether this build/context can assemble at all (§7.2). */
   readonly supported: boolean;
-  /** Whether the URL names a manifest this adapter would attempt. */
-  handles(url: string): boolean;
+  /**
+   * Whether this adapter would attempt the media. `kind` is what detection concluded
+   * from the bytes; without it the decision falls back to the URL, which a host can
+   * make say anything (§9.1, ADR-012).
+   */
+  handles(url: string, kind?: 'hls' | 'dash'): boolean;
   assemble(request: StreamDeliveryRequest): Promise<StreamDelivery>;
   /**
    * Discard anything an earlier session left behind — implemented where a

@@ -19,7 +19,13 @@ import type { DetectionReport, MediaItem } from '@shared/types';
 import { CONTENT_SCRIPT_FILE, DETECTION_FINISHED_CHANNEL } from '@shared/constants';
 import { TypedEventEmitter, type Unsubscribe } from '@shared/utils';
 import { createBadgeController, type BadgeController } from '@runtime/background/badge';
-import { buildDetectionContext, isDetectionReport } from '@runtime/background/context';
+import type { DetectionContext } from '@core/detection/pipeline';
+import type { ResourceProbe } from '@core/detection/probe';
+import {
+  buildDetectionContext,
+  isDetectionReport,
+  observedResourcesFrom,
+} from '@runtime/background/context';
 import { createRuntimeState, supportedCount, type RuntimeState } from '@runtime/background/state';
 
 /**
@@ -62,6 +68,12 @@ export interface BackgroundRuntimeDeps {
   readonly browser: Browser;
   readonly engine: DetectorManager;
   readonly clock?: () => number;
+  /**
+   * Identifies resources the page fetched, by reading their first bytes (§9.1,
+   * ADR-012). Omitted, detection works exactly as it did before: from the DOM alone,
+   * which cannot see a stream a player fetched with script.
+   */
+  readonly probe?: ResourceProbe;
 }
 
 function isTabId(value: unknown): value is number {
@@ -109,6 +121,20 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
     return next;
   };
 
+  /**
+   * Whether a second pass actually changed anything.
+   *
+   * By identity, not by count: a probe that replaces one item with another leaves the
+   * count alone, and the surface still needs to hear about it (§9.5).
+   */
+  const sameItems = (left: readonly MediaItem[], right: readonly MediaItem[]): boolean => {
+    if (left.length !== right.length) {
+      return false;
+    }
+    const ids = new Set(right.map((item) => item.id));
+    return left.every((item) => ids.has(item.id));
+  };
+
   const broadcastFinished = (tabId: number, items: readonly MediaItem[]): void => {
     void browser.messaging
       .broadcast(DETECTION_FINISHED_CHANNEL, { tabId, itemCount: supportedCount(items) })
@@ -137,6 +163,12 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
       state.setItems(tabId, items);
       void badge.set(tabId, supportedCount(items));
       broadcastFinished(tabId, items);
+      // What the page FETCHED is only a list of URLs until something reads the bytes:
+      // a disguised playlist is indistinguishable from a stylesheet by name alone
+      // (ADR-012). That means network requests, so it happens AFTER the DOM result has
+      // already been committed and broadcast — detection latency is a budget (§12.1,
+      // §12.9) and must not wait on a third-party host.
+      void enrich(tabId, report, context, items, token);
       return items;
     } catch (cause) {
       if (runTokens.get(tabId) !== token) {
@@ -150,6 +182,52 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
       return [];
     } finally {
       state.endOperation(tabId);
+    }
+  };
+
+  /**
+   * Second pass: identify what the page fetched, and re-run detection if that adds
+   * anything.
+   *
+   * Deliberately fire-and-forget. It commits only if its tab's token is still current,
+   * so a navigation or a newer report discards it exactly like any other stale run
+   * (§10.2). A probe that finds nothing costs one re-run of nothing: the pass returns
+   * early rather than re-detecting on an unchanged context.
+   */
+  const enrich = async (
+    tabId: number,
+    report: DetectionReport,
+    context: DetectionContext,
+    previous: readonly MediaItem[],
+    token: number,
+  ): Promise<void> => {
+    const probe = deps.probe;
+    if (probe === undefined || runTokens.get(tabId) !== token) {
+      return;
+    }
+    const observed = observedResourcesFrom(report, context.pageUrl);
+    if (observed.length === 0) {
+      return;
+    }
+    try {
+      const networkResources = await probe.identify(observed);
+      if (networkResources.length === 0 || runTokens.get(tabId) !== token) {
+        return;
+      }
+      // The cache is keyed per tab and would answer with the first pass's result; the
+      // enriched context is a different question (§9.9).
+      engine.invalidate(tabId);
+      const items = await engine.detect({ ...context, networkResources });
+      if (runTokens.get(tabId) !== token || sameItems(items, previous)) {
+        return;
+      }
+      state.setItems(tabId, items);
+      void badge.set(tabId, supportedCount(items));
+      broadcastFinished(tabId, items);
+    } catch (cause) {
+      // Identification is best-effort. A host that refuses is the normal case, not a
+      // fault, and must not reach the user as an error (§20.7).
+      emitter.emit('error', toAppError(cause));
     }
   };
 
@@ -190,6 +268,8 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   };
 
   const onNavigate = (tabId: number, url: string | undefined): void => {
+    // A new page means new resources; what was identified for the old one is noise.
+    deps.probe?.forget();
     // Navigation invalidates the tab's cached detection; the content script
     // re-observes the new page and reports fresh signals (§9.9, §8.10). Bumping the
     // token cancels any in-flight run for the previous page.

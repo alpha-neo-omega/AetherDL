@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Disguised stream</title>
+  </head>
+  <body>
+    <h1>Disguised stream</h1>
+    <!--
+      A page shaped like the real video host that motivated content sniffing: the DOM
+      exposes nothing but a MediaSource-backed <video>, and the playlist is fetched by
+      script under a name that lies about what it is.
+    -->
+    <video id="player" controls playsinline muted></video>
+    <script>
+      // Only a blob: URL ever reaches the DOM — exactly what a hls.js-style player leaves behind.
+      document.getElementById('player').src = URL.createObjectURL(new MediaSource());
+      // Fetched with script, so Resource Timing records it as `fetch` and the extension
+      // can tell it apart from a stylesheet the browser loaded as a page asset.
+      fetch('/media/disguised/master.txt')
+        .then((r) => r.text())
+        .catch(() => undefined);
+    </script>
+  </body>
+</html>

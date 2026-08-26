@@ -20,8 +20,8 @@ import { err, ok, type Result } from '@shared/result';
 import { isProtectedStreamCode, streamMessageKeyFor } from '@shared/result/stream';
 import { PlatformError } from '@shared/result/errors';
 import { StreamAssemblyError, StreamProtectedError } from '@core/download/errors';
-import { manifestTypeFromUrl } from '@shared/utils';
-import type { HttpClient } from '@platform/http';
+import { manifestTypeFromUrl, sniffFormat } from '@shared/utils';
+import type { HttpClient, HttpResponse } from '@platform/http';
 import {
   parseDashManifest,
   type DashRepresentation,
@@ -52,6 +52,26 @@ export const STREAM_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 /** One segment is never legitimately this big; a hostile server's would be. */
 export const STREAM_MAX_SEGMENT_BYTES = 64 * 1024 * 1024;
 
+/**
+ * How long one segment may take.
+ *
+ * Deliberately far above the HTTP client's default: hosts throttle anonymous
+ * sequential reads, and measured against a real one the same segment size went from
+ * 150 ms to 44 seconds as a download progressed. A slow host is not a broken host, and
+ * failing a 300-segment download over one slow segment throws away everything fetched
+ * so far.
+ */
+export const STREAM_SEGMENT_TIMEOUT_MS = 120_000;
+
+/**
+ * Attempts per segment, including the first.
+ *
+ * Retried HERE rather than by the queue, because the queue's retry restarts assembly
+ * from the first segment: on a 331-segment stream that turns one hiccup into hours of
+ * refetching (§10.4).
+ */
+export const STREAM_SEGMENT_ATTEMPTS = 3;
+
 export type StreamKind = 'hls' | 'dash';
 
 export interface StreamAssemblyProgress {
@@ -71,6 +91,16 @@ export interface AssembleRequest {
    * preference (§10.6). Omitted keeps the original behaviour — highest bandwidth.
    */
   readonly selection?: StreamSelection;
+  /**
+   * What detection established this manifest is, from its BYTES, when its URL does
+   * not say — a host that serves a playlist as `.txt` would otherwise be refused here
+   * as "not a manifest" after having been correctly detected (§9.1, ADR-012).
+   */
+  readonly kind?: StreamKind;
+  /** Overrides {@link STREAM_SEGMENT_TIMEOUT_MS} (tests, and callers that know better). */
+  readonly segmentTimeoutMs?: number;
+  /** Overrides {@link STREAM_SEGMENT_ATTEMPTS}. */
+  readonly segmentAttempts?: number;
 }
 
 export interface AssembledStream {
@@ -130,18 +160,43 @@ function fail(message: string, code: string, retryable = false): StreamAssemblyE
     : new StreamAssemblyError(message, options);
 }
 
+/** The containers assembly can hand on or take apart. */
+type SegmentContainer = 'ts' | 'aac' | 'mp4';
+
 /**
- * What a segment URL says it is: a transport stream, a bare ADTS audio file (HLS
- * "packed audio"), or fragmented MP4 — which is the assumption when nothing says
- * otherwise, because that is what a segment with no telling extension almost always is.
+ * What a segment URL CLAIMS to be. Used only when the bytes are not in hand yet, and
+ * always superseded by {@link containerOfSegment} once they are.
  */
-function containerFor(segmentUrl: string): 'ts' | 'aac' | 'mp4' {
+function containerFromUrl(segmentUrl: string): SegmentContainer {
   const path = segmentUrl.split(/[?#]/)[0] ?? '';
   const extension = (path.split('.').pop() ?? '').toLowerCase();
   if (extension === 'ts' || extension === 'm2ts' || extension === 'mts') {
     return 'ts';
   }
   return extension === 'aac' || extension === 'adts' ? 'aac' : 'mp4';
+}
+
+/**
+ * What a segment ACTUALLY is, decided by its first bytes and falling back to its URL
+ * only when the bytes say nothing recognisable.
+ *
+ * Names lie, and not always by accident: a real video host serves MPEG-TS segments
+ * with a `.css` extension as `text/css`. Trusting the extension there produced a file
+ * called `.mp4` containing transport-stream bytes — the wrong container, the wrong
+ * name, and the wrong code path for anything that had to be re-packaged (§5.1, §10.7).
+ */
+function containerOfSegment(bytes: Uint8Array | undefined, segmentUrl: string): SegmentContainer {
+  const sniffed = bytes === undefined ? undefined : sniffFormat(bytes);
+  if (sniffed === 'mpeg-ts') {
+    return 'ts';
+  }
+  if (sniffed === 'adts') {
+    return 'aac';
+  }
+  if (sniffed === 'mp4' || sniffed === 'webm') {
+    return 'mp4';
+  }
+  return containerFromUrl(segmentUrl);
 }
 
 export interface PlannedSegment {
@@ -424,7 +479,7 @@ function segmentsOf(representation: DashRepresentation): readonly PlannedSegment
 export async function listStreamRenditions(
   request: AssembleRequest,
 ): Promise<Result<readonly StreamRenditionSnapshot[], StreamAssemblyError>> {
-  const kind = detectStreamKind(request.manifestUrl);
+  const kind = request.kind ?? detectStreamKind(request.manifestUrl);
   if (kind === undefined) {
     return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
   }
@@ -499,7 +554,7 @@ function snapshotOf(
 export async function planStream(
   request: AssembleRequest,
 ): Promise<Result<FetchPlan, StreamAssemblyError>> {
-  const kind = detectStreamKind(request.manifestUrl);
+  const kind = request.kind ?? detectStreamKind(request.manifestUrl);
   if (kind === undefined) {
     return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
   }
@@ -519,7 +574,7 @@ function trackForSlot(
   segments: readonly PlannedSegment[],
   parts: Uint8Array[],
 ): Result<Mp4Track, StreamAssemblyError> {
-  const container = containerFor(segments[0]?.url ?? '');
+  const container = containerOfSegment(parts[0], segments[0]?.url ?? '');
   if (container === 'mp4') {
     return ok(trackFromSegments(parts));
   }
@@ -559,7 +614,7 @@ function trackForSlot(
 export async function assembleStream(
   request: AssembleRequest,
 ): Promise<Result<AssembledStream, StreamAssemblyError>> {
-  const kind = detectStreamKind(request.manifestUrl);
+  const kind = request.kind ?? detectStreamKind(request.manifestUrl);
   if (kind === undefined) {
     return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
   }
@@ -586,7 +641,7 @@ export async function assembleStream(
     if (!fetched.ok) {
       return fetched;
     }
-    const container = containerFor(plan.value.segments[0]?.url ?? '');
+    const container = containerOfSegment(fetched.value[0], plan.value.segments[0]?.url ?? '');
     // A rendition of bare ADTS frames is an audio file; saving it as `.mp4` would name
     // it something it is not (§10.7).
     const extension = container === 'aac' ? 'aac' : container;
@@ -644,6 +699,44 @@ interface FetchState {
 }
 
 /**
+ * Fetch one segment, retrying a transport failure a bounded number of times.
+ *
+ * Only retryable failures are retried: a refusal about what the stream IS never
+ * becomes true on a second attempt, and retrying it would only waste the user's time
+ * (§10.4). The delay between attempts is short and fixed — this is riding out a
+ * throttle, not backing off a queue.
+ */
+async function fetchWithRetries(
+  request: AssembleRequest,
+  segment: PlannedSegment,
+): Promise<HttpResponse> {
+  const attempts = Math.max(1, request.segmentAttempts ?? STREAM_SEGMENT_ATTEMPTS);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await request.http.get(segment.url, {
+        ...(request.signal !== undefined && { signal: request.signal }),
+        ...(segment.range !== undefined && {
+          range: {
+            first: segment.range.offset,
+            last: segment.range.offset + segment.range.length - 1,
+          },
+        }),
+        maxBytes: STREAM_MAX_SEGMENT_BYTES,
+        timeoutMs: request.segmentTimeoutMs ?? STREAM_SEGMENT_TIMEOUT_MS,
+      });
+    } catch (cause) {
+      lastError = cause;
+      const retryable = cause instanceof PlatformError && cause.retryable;
+      if (!retryable || attempt === attempts || request.signal?.aborted === true) {
+        throw cause;
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Fetch one track's segments, in order.
  *
  * Sequential on purpose: playlist order IS the file order, and one transfer at a time
@@ -666,16 +759,7 @@ async function fetchSegments(
     let received: Uint8Array;
     let finalUrl: string;
     try {
-      const response = await request.http.get(segment.url, {
-        ...(request.signal !== undefined && { signal: request.signal }),
-        ...(segment.range !== undefined && {
-          range: {
-            first: segment.range.offset,
-            last: segment.range.offset + segment.range.length - 1,
-          },
-        }),
-        maxBytes: STREAM_MAX_SEGMENT_BYTES,
-      });
+      const response = await fetchWithRetries(request, segment);
       received = response.bytes;
       finalUrl = response.url;
       if (segment.range !== undefined) {

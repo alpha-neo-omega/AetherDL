@@ -9,6 +9,8 @@
  *          detached on unload (§12.8). Coverage-excluded (touches DOM globals); the
  *          observable logic lives in ./observer and ./scan and is unit-tested.
  */
+import { MAX_OBSERVED_RESOURCES } from '@shared/constants';
+import type { WireObservedResource } from '@shared/types';
 import { resolveWebExtApi } from '@platform/browser/webext';
 import { createMessageBus } from '@platform/messaging/service';
 import { createContentObserver } from '@runtime/content/observer';
@@ -24,7 +26,53 @@ const SCAN_DEBOUNCE_MS = 200;
  * navigation gives the page a fresh global, so the next page is observed normally.
  */
 const ALREADY_INJECTED = '__aetherdlContentScript';
+
+/**
+ * Resource Timing initiators that can carry a stream a player fetched itself.
+ *
+ * A page loads hundreds of resources; only the script-driven ones can be the playlist
+ * a MediaSource is being fed from. Reporting the rest would fill the message with
+ * images and fonts (§9.1, ADR-012).
+ */
+const INTERESTING_INITIATORS = new Set(['xmlhttprequest', 'fetch', 'video', 'audio', 'other', '']);
 const MEDIA_EVENTS = ['loadedmetadata', 'loadeddata', 'emptied', 'durationchange'] as const;
+
+/**
+ * What the page has fetched, as plain data.
+ *
+ * Read from the page's own timeline — no request is made here, and nothing is
+ * intercepted. Whether any of these URLs is media is decided later, from their bytes.
+ */
+function observedResources(): readonly WireObservedResource[] {
+  const out: WireObservedResource[] = [];
+  let entries: readonly PerformanceEntry[] = [];
+  try {
+    entries = performance.getEntriesByType('resource');
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (out.length >= MAX_OBSERVED_RESOURCES) {
+      break;
+    }
+    const resource = entry as PerformanceResourceTiming;
+    const initiator = (resource.initiatorType ?? '').toLowerCase();
+    if (!INTERESTING_INITIATORS.has(initiator)) {
+      continue;
+    }
+    const url = resource.name;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      continue;
+    }
+    const size = resource.transferSize || resource.encodedBodySize || 0;
+    out.push({
+      url,
+      ...(initiator !== '' && { initiatorType: initiator }),
+      ...(size > 0 && { sizeBytes: size }),
+    });
+  }
+  return out;
+}
 
 function start(): void {
   const world = globalThis as Record<string, unknown>;
@@ -41,6 +89,7 @@ function start(): void {
     document: document as unknown as DocumentLike,
     pageUrl: () => location.href,
     documentTitle: () => document.title,
+    observedResources,
     sendReport: (report) => {
       void bus.send('detection/run', report).catch(() => undefined);
     },
@@ -65,6 +114,24 @@ function start(): void {
   const onMediaEvent = (): void => {
     observer.notify();
   };
+
+  // A player that fetches its playlist a second after load must not be missed; the
+  // observer debounces, so this cannot become a scan per request (§12.4).
+  let resourceObserver: PerformanceObserver | undefined;
+  try {
+    resourceObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const initiator = ((entry as PerformanceResourceTiming).initiatorType ?? '').toLowerCase();
+        if (INTERESTING_INITIATORS.has(initiator)) {
+          observer.notify();
+          return;
+        }
+      }
+    });
+    resourceObserver.observe({ type: 'resource', buffered: false });
+  } catch {
+    // An engine without Resource Timing observation still detects from the DOM.
+  }
   for (const type of MEDIA_EVENTS) {
     document.addEventListener(type, onMediaEvent, true);
   }
@@ -73,6 +140,7 @@ function start(): void {
     world[ALREADY_INJECTED] = false;
     observer.dispose();
     mutationObserver.disconnect();
+    resourceObserver?.disconnect();
     for (const type of MEDIA_EVENTS) {
       document.removeEventListener(type, onMediaEvent, true);
     }

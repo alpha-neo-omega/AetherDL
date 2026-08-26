@@ -27,6 +27,20 @@ export interface HttpRequestOptions {
   readonly timeoutMs?: number;
   /** Hard ceiling on the bytes this response may produce. */
   readonly maxBytes?: number;
+  /**
+   * Stop reading at `maxBytes` and return what arrived, instead of refusing an
+   * oversized response.
+   *
+   * For identifying a resource from its first bytes (§9.1, ADR-012). A `Range` header
+   * would be the obvious way to ask for a prefix, but `Range` is not CORS-safelisted:
+   * cross-origin it forces a preflight that many hosts do not answer, and a host that
+   * ignores the range answers `200` with the whole body, which this client refuses.
+   * A plain GET that stops reading works on strictly more hosts.
+   *
+   * ASSEMBLY MUST NOT SET THIS. A truncated segment written into an output file would
+   * be silent corruption; the download path wants the refusal (§10.6).
+   */
+  readonly truncate?: boolean;
 }
 
 export interface HttpResponse {

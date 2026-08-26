@@ -32,8 +32,8 @@ export function createLocalStreamDelivery(
 ): StreamDeliveryAdapter {
   return {
     supported: options.objectUrl.supported,
-    handles(url: string): boolean {
-      return detectStreamKind(url) !== undefined;
+    handles(url: string, kind?: 'hls' | 'dash'): boolean {
+      return kind !== undefined || detectStreamKind(url) !== undefined;
     },
     async assemble(request: StreamDeliveryRequest): Promise<StreamDelivery> {
       const ceiling = request.maxTotalBytes ?? options.maxTotalBytes;
@@ -47,6 +47,7 @@ export function createLocalStreamDelivery(
       const assembled = await assembleStream({
         manifestUrl: request.manifestUrl,
         http: options.http,
+        ...(request.kind !== undefined && { kind: request.kind }),
         ...(Object.keys(selection).length > 0 && { selection }),
         ...(request.signal !== undefined && { signal: request.signal }),
         ...(request.onProgress !== undefined && { onProgress: request.onProgress }),

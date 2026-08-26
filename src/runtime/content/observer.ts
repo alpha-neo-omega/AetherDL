@@ -8,7 +8,7 @@
  *          event sources and messaging are injected by the entry (index.ts).
  * Public API: ContentObserver, ContentObserverDeps, createContentObserver.
  */
-import type { DetectionReport } from '@shared/types';
+import type { DetectionReport, WireObservedResource } from '@shared/types';
 import type { DocumentLike } from '@runtime/content/scan';
 import { scanDocument } from '@runtime/content/scan';
 
@@ -29,6 +29,12 @@ export interface ContentObserverDeps {
   readonly documentTitle?: () => string | undefined;
   /** Frame id for sub-frame reports (top frame omits it). */
   readonly frameId?: number;
+  /**
+   * What the page has fetched so far (Resource Timing). Injected rather than read
+   * here, so this module stays a pure function of its dependencies and the entry
+   * keeps the browser globals (§8.10, ADR-012).
+   */
+  readonly observedResources?: () => readonly WireObservedResource[];
   /** Deliver a report to the background. */
   readonly sendReport: (report: DetectionReport) => void;
   /**
@@ -56,10 +62,12 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
     const pageUrl = deps.pageUrl();
     const { domSignals, observedUrls } = scanDocument(deps.document, pageUrl);
     const title = deps.documentTitle?.();
+    const resources = deps.observedResources?.() ?? [];
     const report: DetectionReport = {
       pageUrl,
       domSignals,
       observedUrls,
+      ...(resources.length > 0 && { observedResources: resources }),
       ...(title !== undefined && title !== '' && { documentTitle: title }),
       ...(deps.frameId !== undefined && { frameId: deps.frameId }),
     };

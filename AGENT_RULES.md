@@ -33,11 +33,15 @@
 
 ### Version
 
-`1.2.0`. This document is versioned independently of the product and of PROJECT_BIBLE.md.
+`1.3.0`. This document is versioned independently of the product and of PROJECT_BIBLE.md.
 Amended 2026-08-20 alongside Bible 1.1.0 ([ADR-010](docs/adr/010-non-drm-stream-assembly.md)): the
 privacy rule below now forbids **transmission** rather than all network access, because non-DRM
 stream assembly requires the extension to read a playlist and its segments.
-Amended again 2026-08-20 alongside Bible 1.2.0
+Amended again 2026-08-26 alongside Bible 1.3.0
+([ADR-012](docs/adr/012-detection-time-content-probing.md)): the extension may now read the first
+bytes of a resource the page fetched, in order to identify it — a read no download asked for. See
+the rule below.
+Amended 2026-08-20 alongside Bible 1.2.0
 ([ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)): container work on stream
 tracks is permitted — demultiplexing MPEG-TS and packed audio, and writing fragmented MP4 — with
 the boundary that compressed sample data is copied verbatim. See the rule below.
@@ -411,8 +415,9 @@ The extension **MUST NOT** transmit anything, anywhere: the agent **MUST NOT** i
 identifier, a remote endpoint, or any data-egress path. That guarantee is non-amendable
 ([§25.3](PROJECT_BIBLE.md#253-non-amendable-items)).
 
-The extension's own code makes network calls of exactly **one** kind: read-only `GET` requests to
-assemble a non-DRM stream the user asked for
+The extension's own code makes network calls of exactly **two** kinds, both read-only `GET`, both
+without credentials: assembling a non-DRM stream the user asked for, and identifying a resource the
+page itself already fetched by reading at most its first kilobyte
 ([§14.3](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension),
 [§10.6](PROJECT_BIBLE.md#106-stream-assembly)). For the agent this means:
 
@@ -423,9 +428,32 @@ assemble a non-DRM stream the user asked for
 - **MUST NOT** attach credentials, cookies, headers or identifiers to a request, use any method but
   `GET`, or send a request body.
 - **MUST NOT** request a host permission at install, or fetch an origin the user has not granted at
-  point of use ([§13.3](PROJECT_BIBLE.md#133-permission-strategy)).
+  point of use, for a DOWNLOAD ([§13.3](PROJECT_BIBLE.md#133-permission-strategy)).
+- **MUST NOT** add any host permission for detection-time identification. It holds none by design:
+  it works where a host answers any origin and fails otherwise, and a failure is a normal outcome —
+  never an error shown to the user, and never a reason to widen permissions.
+- **MUST NOT** identify a URL the page did not itself load, construct a URL, follow a link, or walk
+  a manifest at detection time. That is the line between identifying what is already there and
+  crawling, and crawling is a permanent non-goal (N20).
+- **MUST NOT** let identification delay the DOM-derived detection result, or exceed its bounds: at
+  most a 1 KiB prefix, a small fixed number of resources per pass, cached so nothing is read twice.
 - **MUST NOT** fetch, read, follow or log a decryption key, ever
   ([§6](PROJECT_BIBLE.md#6-unsupported-content)).
+
+### Names are not evidence
+
+A URL's extension and a response's `Content-Type` are claims made by whoever served them, and hosts
+do lie: one serves HLS playlists as `.txt`/`text/plain` and MPEG-TS segments as `.css`/`text/css`
+precisely to defeat tools that match on names. Therefore:
+
+- **MUST** decide what a resource is from its BYTES wherever the bytes are available — `#EXTM3U`,
+  `<MPD`, `0x47` at 188-byte strides, `ftyp`/`styp`/`moof` — using `shared/utils/sniff`.
+- **MUST NOT** reintroduce an extension or MIME filter in front of that decision as an
+  "optimisation". Filtering by name is the exact bug this closed
+  ([ADR-012](docs/adr/012-detection-time-content-probing.md)).
+- **MUST NOT** report a container, extension or filename derived from a name the bytes contradict:
+  a file saved as `.mp4` that holds transport-stream bytes is a wrong answer, not a cosmetic one
+  ([§2.8](PROJECT_BIBLE.md#28-honesty-in-ui), [§10.7](PROJECT_BIBLE.md#107-filename-generation)).
 
 ### Container work on stream tracks
 

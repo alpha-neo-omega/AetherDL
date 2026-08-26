@@ -220,6 +220,23 @@ export interface WireDomSignal {
   readonly encrypted?: boolean;
 }
 
+/**
+ * A resource the page itself loaded, as the Resource Timing API reported it (§9.1,
+ * ADR-012).
+ *
+ * This is how a stream that never appears in the DOM becomes visible: a player fetches
+ * its playlist with script and hands the bytes to MediaSource, leaving only a `blob:`
+ * URL on the element. `initiatorType` is what makes the list usable — a playlist
+ * disguised as `.txt` still had to be fetched by script, and that cannot be faked.
+ */
+export interface WireObservedResource {
+  readonly url: string;
+  /** Resource Timing `initiatorType`: `xmlhttprequest`, `fetch`, `link`, `img`, … */
+  readonly initiatorType?: string;
+  /** Bytes over the wire where known; 0/absent for cross-origin without timing access. */
+  readonly sizeBytes?: number;
+}
+
 /** The content script's structured observation of one page/frame (§8.10). */
 export interface DetectionReport {
   readonly pageUrl: string;
@@ -227,6 +244,8 @@ export interface DetectionReport {
   readonly frameId?: number;
   readonly domSignals: readonly WireDomSignal[];
   readonly observedUrls: readonly string[];
+  /** What the page fetched, for identification by content rather than by name. */
+  readonly observedResources?: readonly WireObservedResource[];
 }
 
 /**
@@ -321,6 +340,11 @@ export interface StreamAssembleRequest {
   readonly renditionId?: string;
   /** How to choose when nothing is pinned; the assembler's default when omitted. */
   readonly preference?: StreamQualityPreference;
+  /**
+   * What detection established the manifest is, from its bytes, when the URL does not
+   * say (§9.1, ADR-012).
+   */
+  readonly kind?: 'hls' | 'dash';
 }
 
 /**

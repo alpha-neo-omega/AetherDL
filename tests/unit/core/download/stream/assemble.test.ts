@@ -1071,3 +1071,209 @@ describe('core/download/stream quality selection (§10.6)', () => {
     ]);
   });
 });
+
+describe('core/download/stream container detection by bytes, not by name (§5.1)', () => {
+  it('saves MPEG-TS segments as .ts even when they are served as stylesheets', async () => {
+    // Not hypothetical: a real video host serves its HLS playlist as `.txt`
+    // (text/plain) and its MPEG-TS segments as `.css` (text/css), specifically to
+    // defeat extension matching. Trusting the name produced a `.mp4` file full of
+    // transport-stream bytes.
+    const playlist = 'https://cdn.test/hls/index.m3u8';
+    const http = stubHttp({
+      [playlist]: [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'seg-1.css',
+        '#EXTINF:4,',
+        'seg-2.css',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/seg-1.css': videoTransportStream(),
+      'https://cdn.test/hls/seg-2.css': videoTransportStream(),
+    });
+
+    const result = await assembleStream({ manifestUrl: playlist, http });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.extension).toBe('ts');
+    expect(result.value.mimeType).toBe('video/mp2t');
+  });
+
+  it('saves fragmented MP4 as .mp4 even when the segments are named .ts', async () => {
+    // The same mistake in the other direction, and the more dangerous one: it would
+    // have handed fMP4 bytes to the transport-stream demuxer.
+    const playlist = 'https://cdn.test/hls/index.m3u8';
+    const http = stubHttp({
+      [playlist]: [
+        '#EXTM3U',
+        '#EXT-X-MAP:URI="init.ts"',
+        '#EXTINF:4,',
+        'seg-1.ts',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/init.ts': initSegment(1),
+      'https://cdn.test/hls/seg-1.ts': fragment(1, 1, bytesOf(0x11)),
+    });
+
+    const result = await assembleStream({ manifestUrl: playlist, http });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    expect(result.ok && result.value.extension).toBe('mp4');
+  });
+
+  it('joins split tracks whose MPEG-TS segments are disguised', async () => {
+    // The demux path must be chosen by the bytes too, or a disguised split-track
+    // stream is fed to the fMP4 splitter and produces nothing.
+    const master = 'https://cdn.test/hls/master.m3u8';
+    const http = stubHttp({
+      [master]: [
+        '#EXTM3U',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,URI="audio/en.m3u8"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=320x240,AUDIO="aac"',
+        'video/240.m3u8',
+      ].join('\n'),
+      'https://cdn.test/hls/video/240.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'v1.css',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/audio/en.m3u8': [
+        '#EXTM3U',
+        '#EXTINF:4,',
+        'a1.css',
+        '#EXT-X-ENDLIST',
+      ].join('\n'),
+      'https://cdn.test/hls/video/v1.css': videoTransportStream(),
+      'https://cdn.test/hls/audio/a1.css': audioTransportStream(),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.extension).toBe('mp4');
+    expect(trackIdsOf(joinBytes(...result.value.parts))).toStrictEqual([1, 2]);
+  });
+});
+
+describe('core/download/stream riding out a throttling host (§10.4)', () => {
+  const playlist = 'https://cdn.test/hls/index.m3u8';
+  const body = ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXTINF:4,', 'b.ts', '#EXT-X-ENDLIST'].join('\n');
+
+  /** A client that fails the first `failures` attempts at one URL, then succeeds. */
+  function flakyHttp(
+    failUrl: string,
+    failures: number,
+    error: Error,
+  ): {
+    readonly client: HttpClient;
+    attempts(): number;
+  } {
+    let attempts = 0;
+    const routes: Record<string, Uint8Array | string> = {
+      [playlist]: body,
+      'https://cdn.test/hls/a.ts': bytes(1, 8),
+      'https://cdn.test/hls/b.ts': bytes(2, 8),
+    };
+    return {
+      attempts: () => attempts,
+      client: {
+        get: (url: string) => {
+          if (url === failUrl) {
+            attempts += 1;
+            if (attempts <= failures) {
+              return Promise.reject(error);
+            }
+          }
+          const route = routes[url];
+          if (route === undefined) {
+            return Promise.reject(new Error(`404 ${url}`));
+          }
+          const payload = typeof route === 'string' ? new TextEncoder().encode(route) : route;
+          return Promise.resolve({ status: 200, ok: true, headers: {}, bytes: payload, url });
+        },
+        getText: (url: string) => {
+          const route = routes[url];
+          return typeof route === 'string'
+            ? Promise.resolve(route)
+            : Promise.reject(new Error(`no text at ${url}`));
+        },
+      },
+    };
+  }
+
+  const timeout = (): NetworkError =>
+    new NetworkError('Request exceeded 120000ms', {
+      code: 'http-timeout',
+      messageKey: 'error.network',
+      retryable: true,
+    });
+
+  it('retries a segment that timed out rather than discarding the whole download', async () => {
+    // Measured against a real host: the same segment size went from 150 ms to 44 s as
+    // the download progressed. Failing there would throw away every segment fetched.
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 2, timeout());
+
+    const result = await assembleStream({ manifestUrl: playlist, http: http.client });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    expect(http.attempts()).toBe(3);
+  });
+
+  it('gives up after its bounded number of attempts', async () => {
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 99, timeout());
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      segmentAttempts: 2,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error.code).toBe('stream-segment-failed');
+    expect(http.attempts()).toBe(2);
+  });
+
+  it('does not retry a refusal that a second attempt cannot change', async () => {
+    // A 404 is an answer, not a hiccup. Retrying it wastes the user's time.
+    const permanent = new HttpError('Not found', {
+      code: 'http-404',
+      messageKey: 'error.http',
+      retryable: false,
+    });
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 99, permanent);
+
+    const result = await assembleStream({ manifestUrl: playlist, http: http.client });
+
+    expect(result.ok).toBe(false);
+    expect(http.attempts()).toBe(1);
+  });
+
+  it('asks for a per-segment timeout far above the client default', async () => {
+    const seen: (number | undefined)[] = [];
+    const http: HttpClient = {
+      get: (url: string, options?: HttpRequestOptions) => {
+        seen.push(options?.timeoutMs);
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          headers: {},
+          bytes: bytes(1, 4),
+          url,
+        });
+      },
+      getText: () => Promise.resolve(body),
+    };
+
+    await assembleStream({ manifestUrl: playlist, http });
+
+    // A throttling host is slow, not broken; 30 s would fail a download that works.
+    expect(seen.every((ms) => (ms ?? 0) >= 60_000)).toBe(true);
+  });
+});

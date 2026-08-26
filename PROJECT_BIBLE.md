@@ -29,17 +29,18 @@
 | **Tagline** | Fast. Private. Powerful. |
 | **Classification** | Internal Engineering Handbook — Authoritative |
 | **Status** | Ratified / Active |
-| **Version** | 1.2.0 |
+| **Version** | 1.3.0 |
 | **Stability** | **STATIC** — architecture is frozen; changes require Project Owner approval |
 | **Owner** | Project Owner (AetherDL) |
 | **Audience** | Engineers, Reviewers, AI Implementation Agents, Maintainers, QA, Security |
-| **Supersedes** | 1.0.0 (initial ratified edition) |
+| **Supersedes** | 1.2.0 (this field went stale through two amendments and is corrected here) |
 
 ### Amendment Record
 
 | Version | Date | ADR | What changed |
 |---|---|---|---|
 | 1.0.0 | 2026-08-19 | — | Initial ratified edition |
+| 1.3.0 | 2026-08-26 | [ADR-012](docs/adr/012-detection-time-content-probing.md) | Media is identified by its BYTES, including before the user asks for it. §14.3 amended: the extension now performs a second, bounded kind of read — identifying a resource the page itself fetched, so a stream that never appears in the DOM can be detected at all; the "user-granted origins" constraint is scoped to stream assembly, because probing deliberately holds no host permission and adding one is forbidden. Also amended: §2.6 (metric restated), §9.1 and §9.3 (detection sources; determinism scoped to the pipeline, not to context construction), §9.9 (probe results are in-memory and never persisted), §10.6 (the detected kind travels into assembly), §12.6 (retitled and rewritten for observation plus probing), §24 (ADR-012 listed). §14.1 and §25.3 are untouched: nothing is transmitted, and the DRM boundary is unchanged — encryption is still refused from the manifest's own text before any segment is fetched, and no byte sniff may decide anything about protected content. Owner-approved 2026-08-26 |
 | 1.2.0 | 2026-08-20 | [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md) | Stream rendition selection and container work on stream tracks. §4.9 amended: a *Stream quality* setting is added to the catalogue. §8.5 amended: `stream/qualities` added to the message contract. §10.6 amended: the recorded limits "no remuxing" and "highest bandwidth only" are replaced by what the code does — fragmented-MP4 muxing (shipped in product 1.3.0 and recorded here), MPEG-TS and packed-audio demultiplexing, and user-chosen renditions. §16 amended: §16.9 records the real-world conformance suite. §14.1, §25.3 and the DRM boundary are untouched: encryption is still refused before any segment is fetched, no key is ever read, and no decryption exists. Owner-approved 2026-08-20 |
 | 1.1.0 | 2026-08-20 | [ADR-010](docs/adr/010-non-drm-stream-assembly.md) | Non-DRM HLS/DASH stream assembly implemented. §14.3 amended: the extension now performs the read requests a stream download requires, and still transmits nothing. Also amended: §2.6 (metric restated), §5.1 (containers added), §7.4 (assembly context per engine), §10.6 (implemented limits recorded), §12.1 (assembly-document budget), §13.3 (`offscreen`; host-permission declaration), §22.11 acceptance wording, §24 (ADR-010 listed). §14.1 and §25.3 are untouched: no analytics, telemetry, tracking, data collection, cloud, backend, accounts or identifiers, and the DRM boundary, all remain permanent and unchanged. Owner-approved 2026-08-20 |
 
@@ -237,7 +238,7 @@ manual testing, not by observing users in the field.
 | Crash-free sessions | 100% in test matrix | Regression suite |
 | Telemetry endpoints | **0** | Static analysis / network audit |
 | Data transmitted by the extension itself | **0 bytes** | Network audit ([§14 Privacy](#14-privacy)) — nothing is ever sent |
-| Network calls by the extension itself | **only** the reads a stream download requires, on user-granted origins ([§14.3](#143-external-network-calls-by-the-extension)) | Network audit; the release security gate confines `fetch` to one adapter and proves no UI surface can reach it |
+| Network calls by the extension itself | **only** two kinds of read, both `GET`, both without credentials: the manifest and segments a stream download requires, and a bounded identification of resources the page itself already fetched ([§14.3](#143-external-network-calls-by-the-extension)). Nothing is ever transmitted | Network audit; the release security gate confines `fetch` to one adapter and proves no UI surface can reach it |
 | Accessibility | WCAG 2.1 **AA** pass | [§17 Accessibility](#17-accessibility) |
 | Unit test coverage (core logic) | ≥ 90% statements/branches | [§16 Testing](#16-testing) |
 
@@ -1407,6 +1408,10 @@ de-duplicate, score, cache, and emit a normalized `MediaItem[]`.
 - Apply the [priority system](#94-priority-system), [dedupe](#95-duplicate-removal), and
   [scoring](#97-media-scoring).
 - Own the [detection cache](#99-detection-caching) and invalidate it on navigation.
+- Detection runs in **two passes** where the page fetched resources worth identifying (Bible 1.3.0,
+  [ADR-012](docs/adr/012-detection-time-content-probing.md)): what the DOM shows is committed and
+  broadcast first, and a second pass runs only if probing identified something the first pass could
+  not see. The first pass never waits on the network ([§12.1](#121-performance-budgets)).
 - Enforce DRM refusal ([§6](#6-unsupported-content)) — unsupported items are classified, never downloaded.
 
 **Public API:**
@@ -1464,6 +1469,11 @@ interface Detector {
 **Location:** `core/detection/pipeline`.
 
 The pipeline is a fixed sequence of stages. It is deterministic: same context → same result.
+
+> The guarantee is about the **pipeline**, not about how a context comes to exist. Building a
+> context may now involve identifying resources over the network, which depends on what a host
+> answers (Bible 1.3.0, [ADR-012](docs/adr/012-detection-time-content-probing.md)). Given the same
+> context, the pipeline still produces the same result — that is what the stages are held to.
 
 ```mermaid
 flowchart LR
@@ -1584,6 +1594,9 @@ interface MediaVariant {
   - A **bounded size** (max tabs tracked; LRU eviction) and a **max age** ([§12.5](#125-caching-strategy)).
 - The cache is the source the popup and badge read; it is **never** persisted to disk
   ([§14 Privacy](#14-privacy)).
+- What probing established about a URL is cached the same way — in memory, bounded, dropped on
+  navigation, **never** written to disk. A persisted URL→type map would be a browsing-history
+  artefact on the user's machine, which [§14.2](#142-local-only-data-handling) forbids.
 
 ### 9.10 Detection Performance & Memory Management
 
@@ -1748,6 +1761,7 @@ For **non-DRM** HLS/DASH ([§5.5](#55-progressive-streams--adaptive-manifests)):
 | Container work | **Permitted, and narrowly defined** (Bible 1.2.0, [ADR-011](docs/adr/011-stream-rendition-selection-and-remuxing.md)): assembly may demultiplex MPEG-TS and HLS packed audio, and may write fragmented MP4, in order to join the tracks of ONE stream into one file. Compressed sample data is copied **verbatim** — no decoding, no re-encoding, no transcoding, and therefore no decryption ([§6](#6-unsupported-content)). A single-track MPEG-TS stream still concatenates to `.ts`; a split-track one is joined into `.mp4` |
 | Codecs that can be joined | H.264 video and AAC audio. A rendition carrying anything else (AC-3, E-AC-3, HEVC, MP3) is **refused with the stream types named**, never saved as a silent video |
 | Rendition | The **user's choice**: the *Stream quality* setting ([§4.9](#49-settings)), or a per-download pick from the renditions a manifest declares, read through `stream/qualities` ([§8.5](#85-communication-rules)). Default `highest`. A height cap that excludes every rendition takes the smallest rather than refusing |
+| What counts as a manifest | Whatever detection established it is, from its BYTES (Bible 1.3.0, [ADR-012](docs/adr/012-detection-time-content-probing.md)). The conclusion travels with the item into assembly, so a playlist a host serves as `.txt` is assembled rather than refused as "not a manifest" by its own name |
 | Track alignment | Two tracks from ONE transport stream keep their shared clock exactly. Two tracks from SEPARATE renditions each start at their own first sample, so their relative start can differ by up to one frame |
 | Segment fetching | Sequential (bounded concurrency of one): playlist order is file order, and peak memory stays one segment plus what is kept |
 | Firefox 115–127 | Streams **cannot** be downloaded there: `optional_host_permissions` requires Firefox 128, and taking host access at install instead is forbidden ([§13.3](#133-permission-strategy)). Degrades gracefully per [§7.4](#74-firefox-compatibility); progressive downloads are unaffected |
@@ -2001,12 +2015,37 @@ and manual checks on reference hardware; none are measured by observing real use
 All caches are **in-memory** and bounded; **none** persist to disk except user-owned data
 (settings/history) ([§14](#14-privacy)).
 
-### 12.6 Network Interception (for Detection)
+### 12.6 Network Observation and Detection Probing
+
+> Rewritten in Bible 1.3.0 per [ADR-012](docs/adr/012-detection-time-content-probing.md). A modern
+> player fetches its playlist with script and hands the bytes to MediaSource, so the DOM holds only
+> a `blob:` URL; and hosts serve playlists and segments under names that lie about what they are.
+> Detection that reads only the DOM, and believes only names, cannot see such media at all.
 
 - Network **observation** uses the least-privileged mechanism per target ([§7.5](#75-manifest-v3-strategy)),
-  strictly to *observe* media requests for detection.
+  strictly to *observe* media requests for detection. The content script reads the page's own
+  Resource Timing timeline: it issues no request, intercepts nothing, and mutates nothing about the
+  page.
+- **Probing** (Bible 1.3.0) may then read the **first bytes** of a resource the page already
+  fetched, to establish what it is when its URL and `Content-Type` cannot be trusted. All of the
+  following are MUST:
+  - through the single network adapter, `GET` only, no credentials, `http(s)` only
+    ([§14.3](#143-external-network-calls-by-the-extension));
+  - **only URLs the page itself loaded** — never a constructed URL, a followed link, or a retried
+    variant, which would make this a crawler and breach non-goal N20 ([§3.1](#31-explicit-non-goals));
+  - bounded: a prefix of at most 1 KiB, a small fixed number of resources per detection pass, a
+    per-request timeout, and results cached so no URL is read twice;
+  - **no host permission may be requested or declared for it.** It succeeds where a host answers any
+    origin and fails otherwise; a failure is a normal outcome, never an error shown to the user, and
+    never a reason to widen permissions ([§13.3](#133-permission-strategy));
+  - it must not delay the DOM-derived result: detection commits and broadcasts what it knows first,
+    and re-runs only if probing added something ([§12.1](#121-performance-budgets)).
+- Probe results live in memory for the tab, are dropped on navigation, and are **never persisted**
+  ([§9.9](#99-detection-caching), [§14.2](#142-local-only-data-handling)).
 - AetherDL **MUST NOT** modify protected content, defeat protection, or alter requests to bypass
-  access controls ([§3](#3-non-goals), [§6](#6-unsupported-content)).
+  access controls ([§3](#3-non-goals), [§6](#6-unsupported-content)). A byte sniff establishes what
+  a *container* is; it may never be used to decide anything about protected content, and encryption
+  is still refused from the manifest's own text before any segment is fetched.
 - Observation is scoped to reduce overhead and respects [performance budgets](#121-performance-budgets).
 
 ### 12.7 Garbage Collection & Cleanup
@@ -2191,9 +2230,19 @@ enable any ([§14.1](#141-privacy-guarantees-all-must-hold), permanent under
 2. **Read-only `GET` requests for stream assembly** ([§10.6](#106-stream-assembly)): the manifest,
    and the segments it names, for a download the user asked for.
 3. Least-privilege **observation** of the page's existing media requests for detection
-   ([§12.6](#126-network-interception-for-detection)), which issues no request of its own.
+   ([§12.6](#126-network-observation-and-detection-probing)), which issues no request of its own.
+4. **Bounded identification of a resource the page itself fetched** (Bible 1.3.0,
+   [ADR-012](docs/adr/012-detection-time-content-probing.md)): a `GET` of at most the first kilobyte,
+   to establish what a resource IS when its URL and `Content-Type` cannot be trusted — which is how
+   a stream that never appears in the DOM becomes detectable at all
+   ([§12.6](#126-network-observation-and-detection-probing)).
 
-**Constraints on (2) — all MUST:**
+> **Why (4) is not (2).** This read is not tied to a download the user asked for; it happens while
+> detection runs. That is a real cost and it is stated rather than blurred: a host learns that a
+> resource it had just served to the page was read again. It is bounded to URLs the page already
+> loaded, to a kilobyte, and to a handful per pass, and it holds no host permission of its own.
+
+**Constraints on (2) and (4) — all MUST:**
 
 - **One door.** Exactly one adapter may reach the network (`platform/http`). No other module, and no
   UI surface, may perform or transitively reach a network call.
@@ -2201,11 +2250,16 @@ enable any ([§14.1](#141-privacy-guarantees-all-must-hold), permanent under
 - **No identity.** `credentials: 'omit'` and `cache: 'no-store'`: no cookies, tokens, headers or
   identifiers are attached, so a request carries nothing about the user.
 - **`http(s)` only**, validated before the request is issued ([§13.5](#135-safe-url-validation)).
-- **User-granted origins only**, requested at point of use, per origin
-  ([§13.3](#133-permission-strategy), [§13.7](#137-least-privilege-model)).
-- **Bounded.** Per-request timeout, per-response and per-download size ceilings.
-- **Never for anything else.** A network call for any purpose other than assembling a download the
-  user asked for is a project-level failure, not a design option.
+- **User-granted origins only for (2)**, requested at point of use, per origin
+  ([§13.3](#133-permission-strategy), [§13.7](#137-least-privilege-model)). **(4) holds no host
+  permission at all**: it succeeds only where a host answers any origin, and a host that does not is
+  simply not identified. No permission may be declared or requested to widen it.
+- **Bounded.** Per-request timeout, per-response and per-download size ceilings; (4) additionally
+  reads at most a 1 KiB prefix, of at most a small fixed number of resources per detection pass, and
+  only of URLs the page itself already loaded.
+- **Never for anything else.** A network call for any purpose other than (1)–(4) is a project-level
+  failure, not a design option. In particular, constructing a URL, following a link, or walking a
+  manifest at detection time would make this a crawler and is forbidden (non-goal N20).
 
 This is verifiable via a network audit ([§2.6](#26-success-metrics)), enforced mechanically by the
 release security gate ([§13.10](#1310-security-review-gate)) — which fails the build if a network
@@ -3007,6 +3061,25 @@ Owner Approval: <required for Accepted>
   a smaller copy. The cost is that this project owns three format implementations, mitigated by
   validating them against real media (ffmpeg/ffprobe, a committed fixture downloaded in a real
   browser) and against real packagers ([§16.9](#169-real-world-stream-conformance)).
+
+### ADR-012: Identifying Media by Its Bytes, Before the User Asks for It
+
+- **Status:** Accepted. Owner approval 2026-08-26.
+- **Full record:** [`docs/adr/012-detection-time-content-probing.md`](docs/adr/012-detection-time-content-probing.md).
+- **Context:** A real video host serves its HLS playlist as `.txt`/`text/plain` and its MPEG-TS
+  segments as `.css`/`text/css`, and its player feeds MediaSource so the DOM shows only a `blob:`
+  URL. Detection that reads the DOM and believes names saw nothing at all. An audit also found that
+  `context.networkResources` had never been populated by anything, leaving two detectors as
+  unreachable code.
+- **Decision:** The content script reports what the page fetched (Resource Timing; no request, no
+  interception); the background identifies those resources by reading at most their first kilobyte
+  through the single network door, holding no host permission; bytes beat names everywhere,
+  including in the assembler's choice of container; and the DOM result is committed before any of
+  it, so detection latency is unaffected.
+- **Consequences:** Streams a player fetches with script — most modern video, and every site that
+  disguises its media — become detectable. The cost, stated plainly: a small number of reads the
+  user did not directly ask for, to hosts the page had already contacted. Nothing is transmitted,
+  no permission is added, and the DRM boundary is untouched.
 
 ---
 

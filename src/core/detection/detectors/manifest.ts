@@ -47,14 +47,23 @@ function collect(context: DetectionContext, spec: ManifestSpec): RawCandidate[] 
       return;
     }
     seen.add(url);
+    // Only report a container when the URL's own extension really is a manifest
+    // extension. A host that serves its playlist as `.txt` would otherwise have the
+    // extension it invented shown to the user and used to name the file (§2.8, §10.7).
     const ext = getExtension(url);
+    const honestExtension = ext !== undefined && manifestTypeFromUrl(url) !== undefined;
     candidates.push({
       url,
       kind: 'stream',
       detectedBy: spec.id,
       delivery: spec.type,
       sourceKey: `${spec.type}:${url}`,
-      ...(ext !== undefined && { container: ext }),
+      ...(honestExtension && { container: ext }),
+      // With no usable name in the URL, the page's own title is the honest label —
+      // better than showing the user "playlist.txt".
+      ...(!honestExtension &&
+        context.documentTitle !== undefined &&
+        context.documentTitle !== '' && { title: context.documentTitle }),
       ...(mime !== undefined && { mimeType: mime }),
       ...(encrypted === true && { encrypted: true }),
     });

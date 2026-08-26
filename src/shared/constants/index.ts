@@ -110,6 +110,15 @@ export const MAX_DOM_SIGNALS = 500;
 export const MAX_OBSERVED_URLS = 500;
 
 /**
+ * Resource Timing entries carried in one report (§9.1, ADR-012).
+ *
+ * A busy page loads hundreds; only a few are ever worth identifying, and the
+ * background probes at most {@link PROBE_MAX_PER_RUN} of them anyway. This bound is
+ * about the size of the message, not about the work.
+ */
+export const MAX_OBSERVED_RESOURCES = 200;
+
+/**
  * The title an item carries when nothing named it — no candidate title, no filename,
  * no document title. Shared because the scorer must be able to tell a real title from
  * this placeholder: it used to reward "has a title", which every item satisfies, so
