@@ -70,7 +70,20 @@ export const STREAM_SEGMENT_TIMEOUT_MS = 120_000;
  * from the first segment: on a 331-segment stream that turns one hiccup into hours of
  * refetching (§10.4).
  */
-export const STREAM_SEGMENT_ATTEMPTS = 3;
+export const STREAM_SEGMENT_ATTEMPTS = 5;
+
+/**
+ * How long to keep trying ONE segment before giving up on the download.
+ *
+ * Hosts throttle anonymous sequential reads — measured on a real one, the same segment
+ * size went from 150 ms to 44 seconds and then to nothing at all. Waiting a while is
+ * the honest response to a host that is slow on purpose; waiting forever is not, so the
+ * attempts are bounded in wall-clock as well as in count.
+ */
+export const STREAM_SEGMENT_BUDGET_MS = 5 * 60 * 1000;
+
+/** First backoff step; each attempt waits twice as long as the one before. */
+export const STREAM_RETRY_BASE_MS = 2000;
 
 export type StreamKind = 'hls' | 'dash';
 
@@ -101,6 +114,14 @@ export interface AssembleRequest {
   readonly segmentTimeoutMs?: number;
   /** Overrides {@link STREAM_SEGMENT_ATTEMPTS}. */
   readonly segmentAttempts?: number;
+  /** Overrides {@link STREAM_SEGMENT_BUDGET_MS}: the wall-clock cap on one segment. */
+  readonly segmentBudgetMs?: number;
+  /** Overrides {@link STREAM_RETRY_BASE_MS}. */
+  readonly retryBaseMs?: number;
+  /** Injectable delay, so tests do not wait in real time. */
+  readonly wait?: (ms: number) => Promise<void>;
+  /** Injectable clock, for the same reason. */
+  readonly clock?: () => number;
 }
 
 export interface AssembledStream {
@@ -711,7 +732,12 @@ async function fetchWithRetries(
   segment: PlannedSegment,
 ): Promise<HttpResponse> {
   const attempts = Math.max(1, request.segmentAttempts ?? STREAM_SEGMENT_ATTEMPTS);
+  const budgetMs = request.segmentBudgetMs ?? STREAM_SEGMENT_BUDGET_MS;
+  const baseDelay = request.retryBaseMs ?? STREAM_RETRY_BASE_MS;
+  const wait = request.wait ?? defaultWait;
+  const startedAt = request.clock?.() ?? Date.now();
   let lastError: unknown;
+
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await request.http.get(segment.url, {
@@ -728,12 +754,29 @@ async function fetchWithRetries(
     } catch (cause) {
       lastError = cause;
       const retryable = cause instanceof PlatformError && cause.retryable;
-      if (!retryable || attempt === attempts || request.signal?.aborted === true) {
+      const elapsed = (request.clock?.() ?? Date.now()) - startedAt;
+      if (
+        !retryable ||
+        attempt === attempts ||
+        elapsed >= budgetMs ||
+        request.signal?.aborted === true
+      ) {
         throw cause;
       }
+      // Backing OFF, not hammering: a host that is rate-limiting is answering the
+      // question "please stop for a moment", and the polite reading of that is also
+      // the effective one.
+      await wait(baseDelay * 2 ** (attempt - 1));
     }
   }
   throw lastError;
+}
+
+/** Real time between retries; tests inject their own so they stay instant. */
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**
@@ -784,10 +827,16 @@ async function fetchSegments(
       }
     } catch (cause) {
       const { code, retryable } = describeHttpFailure(cause);
+      // A host that answered the first segments and then stopped is rate-limiting, not
+      // broken, and saying so is more useful than "a segment failed" — it tells the
+      // user the stream is fine and the host is throttling them (§20.5, §2.8).
+      const throttled = index > 0 && (code === 'http-timeout' || code === 'http-network-failed');
       return err(
         fail(
-          `Segment ${String(index + 1)} of ${String(segments.length)} failed (${code})`,
-          'stream-segment-failed',
+          throttled
+            ? `The host stopped answering after ${String(index)} of ${String(segments.length)} segments (${code}); it is rate-limiting this download`
+            : `Segment ${String(index + 1)} of ${String(segments.length)} failed (${code})`,
+          throttled ? 'stream-host-throttled' : 'stream-segment-failed',
           retryable,
         ),
       );

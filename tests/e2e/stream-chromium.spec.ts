@@ -36,6 +36,7 @@ import {
 } from './_fixtures/extension';
 import {
   HLS_LADDER,
+  THROTTLED_TOTAL_BYTES,
   HLS_SEGMENT_COUNT,
   HLS_TOTAL_BYTES,
   ladderTotalBytes,
@@ -727,6 +728,104 @@ test.describe('AetherDL downloads a stream that hides behind its file names (ADR
     expect(task?.filename.endsWith('.ts')).toBe(true);
     expect(task?.filename).not.toContain('.css');
     expect(task?.filename).not.toContain('.txt');
+    await popup.close();
+  });
+});
+
+test.describe('AetherDL rides out a host that rate-limits mid-download (§10.4)', () => {
+  test.describe.configure({ mode: 'serial' });
+  test.setTimeout(60_000);
+
+  let extension: LoadedExtension;
+  let site: FixtureSite;
+  let stagedDir: string;
+
+  function stageWithLoopbackAccess(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'aetherdl-throttle-e2e-'));
+    cpSync(distDir('chrome'), dir, { recursive: true });
+    const manifestPath = join(dir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest['host_permissions'] = ['http://127.0.0.1/*'];
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    return dir;
+  }
+
+  test.beforeAll(async () => {
+    site = await startFixtureSite();
+    stagedDir = stageWithLoopbackAccess();
+    extension = await loadChromiumExtension(stagedDir);
+  });
+
+  test.afterAll(async () => {
+    await extension.close();
+    await site.close();
+    rmSync(stagedDir, { recursive: true, force: true });
+  });
+
+  test('a refused segment is retried, and the download completes', async () => {
+    // Measured against a real host: it served the first segments in 150 ms, then took
+    // 44 s, then stopped answering. Before this, one refusal discarded every segment
+    // already fetched. The fixture refuses the second segment twice, which the queue's
+    // own retry cannot paper over.
+    const popup = await extension.page('popup.html');
+    const items = await sendMessage<readonly MediaItem[]>(popup, {
+      type: 'detection/run',
+      payload: {
+        pageUrl: `${site.origin}/with-media.html`,
+        domSignals: [
+          {
+            role: 'video',
+            tagName: 'VIDEO',
+            src: `${site.origin}/media/throttled/index.m3u8`,
+            width: 640,
+            height: 360,
+          },
+        ],
+        observedUrls: [],
+      },
+    });
+    const stream = items.find((item) => item.url.endsWith('/media/throttled/index.m3u8'));
+    expect(stream).toBeDefined();
+
+    await sendMessage(popup, {
+      type: 'download/enqueue',
+      payload: { itemIds: [stream?.id ?? ''] },
+    });
+
+    const downloads = await until(
+      'the throttled stream to be saved in full',
+      () =>
+        extension.worker.evaluate(() =>
+          chrome.downloads.search({}).then((found) =>
+            found.map((item) => ({
+              state: item.state,
+              bytes: item.bytesReceived,
+              url: item.url,
+              filename: item.filename,
+            })),
+          ),
+        ),
+      (found: readonly NativeDownload[]) =>
+        found.some(
+          (item) =>
+            item.state === 'complete' &&
+            item.url.startsWith('blob:') &&
+            item.bytes === THROTTLED_TOTAL_BYTES,
+        ),
+      45_000,
+    );
+
+    // Every segment, including the one that was refused twice.
+    expect(
+      downloads.some((item) => item.bytes === THROTTLED_TOTAL_BYTES && item.state === 'complete'),
+    ).toBe(true);
+    const queue = await sendMessage<readonly DownloadTask[]>(popup, { type: 'download/query' });
+    const task = queue.find((entry) => entry.item.url.endsWith('/media/throttled/index.m3u8'));
+    expect(task?.state).toBe('completed');
+    // The load-bearing assertion: the QUEUE never retried this job. The recovery came
+    // from asking the same segment again, inside one assembly — without which the
+    // queue's retry would have refetched every segment from the beginning.
+    expect(task?.attempt).toBe(0);
     await popup.close();
   });
 });

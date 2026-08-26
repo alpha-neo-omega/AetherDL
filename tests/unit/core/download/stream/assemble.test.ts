@@ -697,7 +697,7 @@ describe('assembleStream: failure handling', () => {
     expect(result.error.code).toBe('stream-not-a-manifest');
   });
 
-  it('stops at the first failed segment and keeps the retryable flag', async () => {
+  it('stops when a segment keeps failing, and names the host as the reason', async () => {
     const http = stubHttp({
       [master]: playlist,
       'https://cdn.test/hls/a.ts': bytes(1),
@@ -708,15 +708,33 @@ describe('assembleStream: failure handling', () => {
       }),
     });
 
-    const result = await assembleStream({ manifestUrl: master, http });
+    const result = await assembleStream({ manifestUrl: master, http, wait: instantly });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
       return;
     }
-    expect(result.error.code).toBe('stream-segment-failed');
-    expect(result.error.message).toContain('Segment 2 of 2');
+    // A host that served the first segment and then stopped is rate-limiting, and the
+    // message says so rather than blaming the stream (§20.5).
+    expect(result.error.code).toBe('stream-host-throttled');
+    expect(result.error.message).toContain('1 of 2 segments');
     expect(result.error.retryable).toBe(true);
+  });
+
+  it('calls the FIRST segment failing what it is, not a throttle', async () => {
+    const http = stubHttp({
+      [master]: playlist,
+      'https://cdn.test/hls/a.ts': new NetworkError('boom', {
+        code: 'http-network-failed',
+        messageKey: 'error.http',
+        retryable: true,
+      }),
+    });
+
+    const result = await assembleStream({ manifestUrl: master, http, wait: instantly });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error.code).toBe('stream-segment-failed');
   });
 
   it('propagates a manifest fetch failure as retryable when the transport says so', async () => {
@@ -1162,6 +1180,9 @@ describe('core/download/stream container detection by bytes, not by name (§5.1)
   });
 });
 
+/** No real waiting in tests; the backoff schedule is asserted separately. */
+const instantly = (): Promise<void> => Promise.resolve();
+
 describe('core/download/stream riding out a throttling host (§10.4)', () => {
   const playlist = 'https://cdn.test/hls/index.m3u8';
   const body = ['#EXTM3U', '#EXTINF:4,', 'a.ts', '#EXTINF:4,', 'b.ts', '#EXT-X-ENDLIST'].join('\n');
@@ -1220,7 +1241,11 @@ describe('core/download/stream riding out a throttling host (§10.4)', () => {
     // the download progressed. Failing there would throw away every segment fetched.
     const http = flakyHttp('https://cdn.test/hls/b.ts', 2, timeout());
 
-    const result = await assembleStream({ manifestUrl: playlist, http: http.client });
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: instantly,
+    });
 
     expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
     expect(http.attempts()).toBe(3);
@@ -1233,10 +1258,13 @@ describe('core/download/stream riding out a throttling host (§10.4)', () => {
       manifestUrl: playlist,
       http: http.client,
       segmentAttempts: 2,
+      wait: instantly,
     });
 
     expect(result.ok).toBe(false);
-    expect(result.ok || result.error.code).toBe('stream-segment-failed');
+    // Second segment, so this reads as the host rate-limiting rather than as a broken
+    // stream — the distinction the user actually needs.
+    expect(result.ok || result.error.code).toBe('stream-host-throttled');
     expect(http.attempts()).toBe(2);
   });
 
@@ -1249,10 +1277,54 @@ describe('core/download/stream riding out a throttling host (§10.4)', () => {
     });
     const http = flakyHttp('https://cdn.test/hls/b.ts', 99, permanent);
 
-    const result = await assembleStream({ manifestUrl: playlist, http: http.client });
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: instantly,
+    });
 
     expect(result.ok).toBe(false);
     expect(http.attempts()).toBe(1);
+  });
+
+  it('backs off between attempts instead of hammering the host', async () => {
+    const waits: number[] = [];
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 3, timeout());
+
+    await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+
+    // Doubling, so a host that asked for a moment gets one.
+    expect(waits).toStrictEqual([2000, 4000, 8000]);
+  });
+
+  it('gives up on a segment once its wall-clock budget is spent', async () => {
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 99, timeout());
+    let now = 0;
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: (ms) => {
+        // Time passes while waiting, which is what spends the budget.
+        now += ms;
+        return Promise.resolve();
+      },
+      clock: () => now,
+      segmentBudgetMs: 5000,
+      segmentAttempts: 50,
+    });
+
+    expect(result.ok).toBe(false);
+    // Bounded in wall clock as well as in count: waiting a while is honest, waiting
+    // forever is not.
+    expect(http.attempts()).toBeLessThan(10);
   });
 
   it('asks for a per-segment timeout far above the client default', async () => {

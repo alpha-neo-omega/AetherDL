@@ -56,7 +56,13 @@ describe('shared/result stream vocabulary', () => {
   });
 
   it('describes a transfer failure as a network problem, and allows a retry', () => {
-    for (const code of ['stream-manifest-fetch-failed', 'stream-segment-failed']) {
+    // `stream-host-throttled` is a host limiting the download, not a broken stream:
+    // it reads as a network condition and another attempt later may well work.
+    for (const code of [
+      'stream-manifest-fetch-failed',
+      'stream-segment-failed',
+      'stream-host-throttled',
+    ]) {
       expect(streamMessageKeyFor(code)).toBe('error.network');
       expect(streamRetryableFor(code)).toBe(true);
     }

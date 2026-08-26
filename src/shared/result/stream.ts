@@ -54,6 +54,7 @@ export function streamMessageKeyFor(code: string): string {
   if (
     code === 'stream-manifest-fetch-failed' ||
     code === 'stream-segment-failed' ||
+    code === 'stream-host-throttled' ||
     code.startsWith('http-')
   ) {
     return 'error.network';
@@ -66,7 +67,12 @@ export function streamMessageKeyFor(code: string): string {
  * about what the stream IS never can, and retrying one only wastes the user's time.
  */
 export function streamRetryableFor(code: string): boolean {
-  if (code === 'stream-manifest-fetch-failed' || code === 'stream-segment-failed') {
+  if (
+    code === 'stream-manifest-fetch-failed' ||
+    code === 'stream-segment-failed' ||
+    // Worth another attempt later: the host is limiting, not refusing.
+    code === 'stream-host-throttled'
+  ) {
     return true;
   }
   return code === 'http-timeout' || code === 'http-network-failed';

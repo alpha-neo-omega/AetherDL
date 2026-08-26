@@ -87,8 +87,14 @@ designed: `.txt` → HLS, `.css` → MPEG-TS.
   download progressed — past the 30 s client default, which failed the job and threw away everything
   already fetched. Segments now get a 120 s budget and up to three attempts, retried where the
   failure is a transport failure and never where it is a refusal that a second attempt cannot
-  change. Retried at the segment, not by the queue: the queue's retry restarts assembly from the
-  first segment, which on a 331-segment stream turns one hiccup into hours of refetching.
+  change, with exponential backoff between attempts and a five-minute wall-clock budget per segment.
+  Retried at the segment, not by the queue: the queue's retry restarts assembly from the first
+  segment, which on a 331-segment stream turns one hiccup into hours of refetching. Proven in a real
+  browser against a fixture that refuses a segment twice — the assertion that makes it meaningful is
+  that the job's queue-level attempt count stays at zero.
+- **A host that stops answering is described as one.** Where the first segments arrived and a later
+  one did not, the failure now reads "the host stopped answering after N of M segments; it is
+  rate-limiting this download" instead of a generic segment failure, and is marked retryable.
 - What AetherDL will **not** do about such a host: spoof a `Referer`, forge headers, or otherwise
   alter requests to get past an access control. That is forbidden outright (§3, §12.6) and is the
   line between a downloader and a bypass tool. A host that throttles anonymous reads is exercising

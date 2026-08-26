@@ -60,6 +60,21 @@ export const HLS_LADDER_SEGMENTS = 2;
  */
 export const DISGUISED_SEGMENTS = 2;
 
+/**
+ * A host that answers, then rate-limits, then relents — what a real anti-leech CDN
+ * does to an anonymous sequential reader.
+ *
+ * The second segment is refused with `503` the first TWO times it is asked for. Two
+ * matters: the download manager also retries, from the beginning, so a single refusal
+ * would be survived by that alone and would prove nothing about retrying the segment
+ * itself. Two refusals in one assembly can only be survived by backing off and asking
+ * again for the same segment — which is what the test asserts, by also requiring that
+ * the job never went through a queue-level retry.
+ */
+export const THROTTLED_SEGMENTS = 3;
+export const THROTTLED_SEGMENT_BYTES = 512;
+export const THROTTLED_TOTAL_BYTES = THROTTLED_SEGMENTS * THROTTLED_SEGMENT_BYTES;
+
 export function ladderTotalBytes(height: number): number {
   const rung = HLS_LADDER.find((entry) => entry.height === height);
   if (rung === undefined) {
@@ -80,6 +95,9 @@ export interface FixtureSite {
  * card, so a random port would make every release asset differ (§8.15 determinism).
  */
 export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Promise<FixtureSite> {
+  /** How many times the throttling fixture has refused its second segment. */
+  let throttleRefusals = 0;
+
   const server: Server = createServer((request, response) => {
     const requested = (request.url ?? '/').split('?')[0] ?? '/';
     // A media CDN answers any origin, which is what lets the extension identify a
@@ -136,6 +154,41 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
         'content-length': String(Buffer.byteLength(body)),
       });
       response.end(body);
+      return;
+    }
+    // A host that rate-limits mid-download (see THROTTLED_SEGMENTS).
+    if (requested === '/media/throttled/index.m3u8') {
+      const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:2'];
+      for (let index = 1; index <= THROTTLED_SEGMENTS; index += 1) {
+        lines.push('#EXTINF:1.000,', `seg-${String(index)}.ts`);
+      }
+      lines.push('#EXT-X-ENDLIST', '');
+      const body = lines.join('\n');
+      response.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    const throttled = /^\/media\/throttled\/seg-(\d+)\.ts$/.exec(requested);
+    if (throttled !== null) {
+      const index = Number(throttled[1]);
+      if (index < 1 || index > THROTTLED_SEGMENTS) {
+        response.writeHead(404).end();
+        return;
+      }
+      // Refuse the second segment twice, the way a limiter does, then serve it.
+      if (index === 2 && throttleRefusals < 2) {
+        throttleRefusals += 1;
+        response.writeHead(503, { 'retry-after': '1' }).end();
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'video/mp2t',
+        'content-length': String(THROTTLED_SEGMENT_BYTES),
+      });
+      response.end(Buffer.alloc(THROTTLED_SEGMENT_BYTES, index));
       return;
     }
     // The disguised stream (see DISGUISED_SEGMENTS): correct bytes, lying names.
