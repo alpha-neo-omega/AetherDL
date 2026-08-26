@@ -1251,6 +1251,23 @@ stateDiagram-v2
 candidate signals; report them to the background via messaging. **No** UI, **no** page-world
 injection, **no** heavy processing.
 
+**Frames (Bible 1.3.0).** A page's media is frequently not in its top document: a video host
+wraps its own player in an `/embed/` iframe, so the top frame holds no `<video>` at all and the
+playlist is fetched inside the frame, where the top frame's Resource Timing cannot see it either.
+Therefore:
+
+- The observer runs in **every frame the engine will allow**, not only the top document. The top
+  document is injected first and awaited; frames follow as a **separate, best-effort** injection,
+  because engines differ sharply in how they treat frames under `activeTab` and one of them is slow
+  enough about it to hold up the whole refresh ([§7.2](#72-compatibility-strategy)).
+- Frames are reached **only when a page says it has any**, and **once per page**. Paying that cost
+  on every page — nearly all of which have no frames worth reading — measurably starved the runtime
+  ([§12.1](#121-performance-budgets)).
+- Each frame reports **in its own right**, and the background keeps one report per frame, keyed by
+  the frame's URL, merging them into the single view detection runs over. A later report from one
+  frame **MUST NOT** erase what another frame observed, and navigation clears them all together
+  ([§4.1](#41-media-detection), [§9.9](#99-detection-caching)).
+
 ```mermaid
 stateDiagram-v2
     [*] --> Injected: matched page / programmatic inject (scripting)

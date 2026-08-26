@@ -1,15 +1,17 @@
-# AetherDL 1.5.0 — Release Audit
+# AetherDL 1.6.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.5.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> against the `1.6.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
 > 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, split-track stream muxing in
 > 1.3.0, user-chosen stream renditions with MPEG-TS and packed-audio demultiplexing in 1.4.0, and
 > — new in 1.5.0 — identifying media by its BYTES rather than by its file name, which is the first
 > feature in this project to perform a network read that no download asked for
-> ([ADR-012](adr/012-detection-time-content-probing.md)). Store submission
+> ([ADR-012](adr/012-detection-time-content-probing.md)), and — new in 1.6.0 — observing every
+> frame of a page, because a player is usually in an iframe and the top document holds no media at
+> all. Store submission
 > requires Owner-held credentials and is a gated manual step (§18.8); distribution is via official
 > stores only (§18.6, non-goal N17).
 >
@@ -39,19 +41,19 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.5.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Also: segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched |
+| Version | `1.6.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched. And 1.6.0 observes every frame the engine allows: a player inside an `/embed/` iframe — the usual arrangement — was previously invisible |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.5.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1249 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 59 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.6.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1259 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 60 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 | Also executed, outside the gate | `npm run test:live`, **re-run at 1.5.0** because sniffing changed how every case decides what a resource is: **9 cases, all passed**, no verdict changed. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.5.0-chrome.zip` | 140 842 | 20 | `aa323a2712103a1565a5038d36851a99bce4bc4979bc3aebff9663e92766c933` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.5.0-firefox.zip` | 140 906 | 20 | `60b5435d7d341d9bc6df7d358badfdf41211d6c84ea9c1e733c4cc7e85afb336` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.6.0-chrome.zip` | 141 239 | 20 | `2a5125bfd2ab3c5924e88f4fe493c20d7818d101e3764cbf6b252058783c0ea4` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.6.0-firefox.zip` | 141 305 | 20 | `bb51f9f0ae949b330d4820cfc65296b167ccc8fcba4eda5583420cf4134f7b39` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -263,11 +265,11 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1249 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1259 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
-validations, the security gate, packaging, and 59 browser e2e tests (Chromium and Firefox, including
+validations, the security gate, packaging, and 60 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 96.23 % statements, 90.80 % branches.
+`npm run test:coverage` (which `ci` does not run): 96.25 % statements, 90.79 % branches.
 
 Branch coverage is lower than at `1.3.0`, and the reason is worth stating rather than smoothing
 over: the new format code reads bytes one at a time behind a defensive fallback per read
@@ -276,6 +278,13 @@ over: the new format code reads bytes one at a time behind a defensive fallback 
 malformed PES, a reserved sampling rate, a truncated parameter set, an unreadable rendition,
 descriptors in a PMT, adaptation-only packets, a PES that spans packets, a 33-bit timestamp — each
 have a test that names them.
+
+`1.6.0` added 12 tests over observing frames, and one of them is the whole point: a watch page
+holding no media of its own, wrapping the disguised player in a same-origin iframe, asserted to have
+`videos: 0, iframes: 1` in its top document while the frame reports the playlist in its own right.
+The rest pin the cost controls — frames are reached only when a page says it has any, once per page,
+and again after navigation — because reaching into frames is markedly slower on one engine and
+paying it everywhere measurably starved the runtime.
 
 `1.5.0` added 47 tests, and the ones worth naming are the ones that were wrong first. The sniffer is
 tested against the false positives a naive signature check produces — a lone `0x47`, arbitrary XML,

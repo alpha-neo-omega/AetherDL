@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { DetectionReport } from '@shared/types';
 import { createRuntimeState } from '@runtime/background/state';
 import { mediaItem, report } from '../_fixtures';
 
@@ -175,5 +176,111 @@ describe('runtime state: tracked tabs are bounded (§12.1)', () => {
 
     expect(state.getItems(1)).toEqual([]);
     expect(state.getReport(1)).toBeUndefined();
+  });
+});
+
+describe('runtime state — one report per frame (§8.10)', () => {
+  const frame = (url: string, extra: Partial<DetectionReport> = {}): DetectionReport => ({
+    pageUrl: url,
+    domSignals: [],
+    observedUrls: [],
+    ...extra,
+  });
+
+  it('keeps each frame beside the others instead of replacing', () => {
+    // A video host wraps its player in an `/embed/` iframe: the top document holds no
+    // media at all, and the frame holds everything. A later report from one frame must
+    // not erase what the other observed.
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    state.setReport(
+      1,
+      frame('https://site.test/watch', { observedUrls: ['https://a.test/x.mp4'] }),
+    );
+    state.setReport(
+      1,
+      frame('https://site.test/embed/abc', { observedUrls: ['https://b.test/y.m3u8'] }),
+    );
+
+    const merged = state.getReport(1);
+
+    expect(merged?.observedUrls).toStrictEqual(['https://a.test/x.mp4', 'https://b.test/y.m3u8']);
+    expect(state.getFrameReports(1)).toHaveLength(2);
+  });
+
+  it('takes the page URL and title from the top frame', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    // The frame reports first, so "first seen" would pick the wrong one.
+    state.setReport(1, frame('https://site.test/embed/abc', { documentTitle: 'embed' }));
+    state.setReport(1, frame('https://site.test/watch', { documentTitle: 'Watch — Site' }));
+
+    const merged = state.getReport(1);
+
+    expect(merged?.pageUrl).toBe('https://site.test/watch');
+    expect(merged?.documentTitle).toBe('Watch — Site');
+  });
+
+  it('merges observed resources across frames, without duplicates', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    state.setReport(
+      1,
+      frame('https://site.test/watch', {
+        observedResources: [{ url: 'https://cdn.test/a.txt', initiatorType: 'fetch' }],
+      }),
+    );
+    state.setReport(
+      1,
+      frame('https://site.test/embed/abc', {
+        observedResources: [
+          { url: 'https://cdn.test/a.txt', initiatorType: 'fetch' },
+          { url: 'https://cdn.test/b.txt', initiatorType: 'xmlhttprequest' },
+        ],
+      }),
+    );
+
+    expect(state.getReport(1)?.observedResources?.map((r) => r.url)).toStrictEqual([
+      'https://cdn.test/a.txt',
+      'https://cdn.test/b.txt',
+    ]);
+  });
+
+  it('replaces a frame when that same frame reports again', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    state.setReport(
+      1,
+      frame('https://site.test/watch', { observedUrls: ['https://a.test/1.mp4'] }),
+    );
+    state.setReport(
+      1,
+      frame('https://site.test/watch', { observedUrls: ['https://a.test/2.mp4'] }),
+    );
+
+    expect(state.getReport(1)?.observedUrls).toStrictEqual(['https://a.test/2.mp4']);
+    expect(state.getFrameReports(1)).toHaveLength(1);
+  });
+
+  it('bounds how many frames one tab may hold', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    for (let index = 0; index < 40; index += 1) {
+      state.setReport(1, frame(`https://site.test/frame/${String(index)}`));
+    }
+    // A page that creates frames endlessly must not grow this without limit (§10.9).
+    expect(state.getFrameReports(1).length).toBeLessThanOrEqual(12);
+  });
+
+  it('forgets every frame when the tab is cleared', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    state.setReport(1, frame('https://site.test/watch'));
+    state.setReport(1, frame('https://site.test/embed/abc'));
+
+    state.clearDetection(1);
+
+    expect(state.getReport(1)).toBeUndefined();
+    expect(state.getFrameReports(1)).toStrictEqual([]);
   });
 });

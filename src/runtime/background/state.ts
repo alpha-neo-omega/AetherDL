@@ -46,6 +46,16 @@ interface MutableTab {
   status: TabDetectionStatus;
   itemCount: number;
   connected: boolean;
+  /**
+   * The most recent report from each FRAME of the tab, keyed by that frame's URL.
+   *
+   * A page's media is frequently not in its top document: a video host wraps its own
+   * player in an `/embed/` iframe, so the top frame holds no `<video>` at all and the
+   * playlist is fetched inside the frame, where the top frame's Resource Timing cannot
+   * see it. Keyed rather than replaced, because a later report from one frame must not
+   * erase what another frame observed (§8.10, ADR-012).
+   */
+  reportsByFrame: Map<string, DetectionReport>;
   lastReport: DetectionReport | undefined;
   lastItems: readonly MediaItem[];
   updatedAt: number;
@@ -64,8 +74,16 @@ export interface RuntimeState {
   setItems(tabId: number, items: readonly MediaItem[]): void;
   getItems(tabId: number): readonly MediaItem[];
   /** Store the last observations for a tab (used by refresh). */
+  /** Record one FRAME's report; frames are kept side by side, not replaced. */
   setReport(tabId: number, report: DetectionReport): void;
+  /**
+   * Everything the tab's frames have observed, as one report — what detection runs
+   * over. The top frame's URL is used as the page URL where one is known, because
+   * that is the page the user is on.
+   */
   getReport(tabId: number): DetectionReport | undefined;
+  /** The individual frame reports, newest last. */
+  getFrameReports(tabId: number): readonly DetectionReport[];
   /** Drop a tab's detection results + stored observations (status → 'idle'). */
   clearDetection(tabId: number): void;
   setActiveTab(tabId: number | undefined): void;
@@ -98,6 +116,58 @@ export interface RuntimeStateDeps {
   readonly clock: () => number;
   /** Overrides {@link MAX_TRACKED_TABS}; for tests and tuning. */
   readonly maxTabs?: number;
+}
+
+/** Frames tracked per tab; past this the oldest is dropped (§10.9). */
+const MAX_FRAMES_PER_TAB = 12;
+
+/**
+ * Fold every frame's observations into the one report detection runs over.
+ *
+ * Signals and URLs are already absolute — each frame resolved them against its own
+ * document — so a union is meaningful. The top frame supplies the page URL and title
+ * where it reported at all; otherwise the first frame does, so a page whose only media
+ * lives in a frame still gets a sensible name.
+ */
+function mergedReport(tab: MutableTab | undefined): DetectionReport | undefined {
+  if (tab === undefined || tab.reportsByFrame.size === 0) {
+    return undefined;
+  }
+  const all = [...tab.reportsByFrame.values()];
+  const top = all.find((report) => report.pageUrl === tab.url);
+  // Only the tab's own page and its FRAMES are merged. A report from anything else —
+  // an `about:blank` context, a surface driving the runtime directly — is kept for
+  // whoever asks for it by frame, but folding it into the page's observations would
+  // attribute media to a page that never had it (§4.1 detection is per tab AND page).
+  const reports =
+    top === undefined
+      ? all
+      : all.filter((report) => report === top || /^https?:\/\//i.test(report.pageUrl));
+  if (reports.length <= 1) {
+    return reports[0] ?? all[0];
+  }
+  const primary = top ?? reports[0];
+  const urls = new Set<string>();
+  const resources = new Map<string, NonNullable<DetectionReport['observedResources']>[number]>();
+  const signals: DetectionReport['domSignals'][number][] = [];
+  for (const report of reports) {
+    signals.push(...report.domSignals);
+    for (const url of report.observedUrls) {
+      urls.add(url);
+    }
+    for (const resource of report.observedResources ?? []) {
+      if (!resources.has(resource.url)) {
+        resources.set(resource.url, resource);
+      }
+    }
+  }
+  return {
+    pageUrl: primary?.pageUrl ?? reports[0]?.pageUrl ?? '',
+    ...(primary?.documentTitle !== undefined && { documentTitle: primary.documentTitle }),
+    domSignals: signals,
+    observedUrls: [...urls],
+    ...(resources.size > 0 && { observedResources: [...resources.values()] }),
+  };
 }
 
 export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
@@ -149,6 +219,7 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
         status: 'idle',
         itemCount: 0,
         connected: false,
+        reportsByFrame: new Map<string, DetectionReport>(),
         lastReport: undefined,
         lastItems: [],
         updatedAt: clock(),
@@ -210,18 +281,35 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
 
     setReport(tabId: number, report: DetectionReport): void {
       const tab = ensure(tabId);
+      // One slot per frame, keyed by the frame's own URL. Bounded so a page that
+      // creates frames endlessly cannot grow this without limit (§10.9).
+      if (
+        tab.reportsByFrame.size >= MAX_FRAMES_PER_TAB &&
+        !tab.reportsByFrame.has(report.pageUrl)
+      ) {
+        const oldest = tab.reportsByFrame.keys().next().value;
+        if (oldest !== undefined) {
+          tab.reportsByFrame.delete(oldest);
+        }
+      }
+      tab.reportsByFrame.set(report.pageUrl, report);
       tab.lastReport = report;
       tab.connected = true;
       tab.updatedAt = clock();
     },
 
     getReport(tabId: number): DetectionReport | undefined {
-      return tabs.get(tabId)?.lastReport;
+      return mergedReport(tabs.get(tabId));
+    },
+
+    getFrameReports(tabId: number): readonly DetectionReport[] {
+      return [...(tabs.get(tabId)?.reportsByFrame.values() ?? [])];
     },
 
     clearDetection(tabId: number): void {
       const tab = ensure(tabId);
       tab.lastItems = [];
+      tab.reportsByFrame.clear();
       tab.lastReport = undefined;
       tab.itemCount = 0;
       tab.status = 'idle';

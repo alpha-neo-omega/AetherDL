@@ -35,6 +35,9 @@ export interface ContentObserverDeps {
    * keeps the browser globals (§8.10, ADR-012).
    */
   readonly observedResources?: () => readonly WireObservedResource[];
+  /** How many frames this document embeds; the background uses it to decide whether
+   *  reaching into frames is worth doing at all. */
+  readonly frameCount?: () => number;
   /** Deliver a report to the background. */
   readonly sendReport: (report: DetectionReport) => void;
   /**
@@ -63,11 +66,13 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
     const { domSignals, observedUrls } = scanDocument(deps.document, pageUrl);
     const title = deps.documentTitle?.();
     const resources = deps.observedResources?.() ?? [];
+    const frames = deps.frameCount?.() ?? 0;
     const report: DetectionReport = {
       pageUrl,
       domSignals,
       observedUrls,
       ...(resources.length > 0 && { observedResources: resources }),
+      ...(frames > 0 && { frameCount: frames }),
       ...(title !== undefined && title !== '' && { documentTitle: title }),
       ...(deps.frameId !== undefined && { frameId: deps.frameId }),
     };

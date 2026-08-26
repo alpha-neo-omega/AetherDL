@@ -115,6 +115,8 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   // invalidation (navigation/clear); a run only commits if its token is still
   // current, so a stale in-flight result never overwrites newer state (§10.2).
   const runTokens = new Map<number, number>();
+  /** Page URL whose frames have already been reached, per tab. */
+  const framesObserved = new Map<number, string>();
   const bumpToken = (tabId: number): number => {
     const next = (runTokens.get(tabId) ?? 0) + 1;
     runTokens.set(tabId, next);
@@ -148,6 +150,7 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
     source: 'dom' | 'manual',
   ): Promise<readonly MediaItem[]> => {
     state.setReport(tabId, report);
+    observeFrames(tabId, report);
     state.setStatus(tabId, 'running');
     state.beginOperation(tabId);
     const token = bumpToken(tabId);
@@ -240,16 +243,43 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
    */
   const injectObserver = async (tabId: number): Promise<void> => {
     try {
+      // The top document first, and awaited: it is the fast, always-permitted case, and
+      // the caller's refresh should not wait on anything slower.
       await browser.scripting.executeScript({
         target: { tabId },
         files: [CONTENT_SCRIPT_FILE],
       });
+      // Frames are reached separately, and only when a page turns out to have any —
+      // see `observeFrames`.
     } catch (cause) {
       // A tab the extension may not touch (browser UI pages, the store, a tab that
       // closed mid-flight) simply yields no observations; the refresh still answers
       // from what is already known (§20.7).
       emitter.emit('error', toAppError(cause));
     }
+  };
+
+  /**
+   * Reach into a page's frames, once per page, and only when the page said it has any.
+   *
+   * A video host routinely wraps its player in an `/embed/` iframe: the top document
+   * then holds no `<video>` at all, and the playlist is fetched inside the frame where
+   * the top frame's Resource Timing cannot see it (§8.10, ADR-012). Reaching into
+   * frames is markedly slower on some engines, though, and paying it on every page —
+   * the overwhelming majority of which have no frames worth reading — measurably
+   * starved the rest of the runtime, so it is asked for only when it can pay off.
+   *
+   * Best effort by design: frames the extension may not touch are skipped by the
+   * browser, and a frame's observations arrive as their own report when they arrive.
+   */
+  const observeFrames = (tabId: number, report: DetectionReport): void => {
+    if ((report.frameCount ?? 0) <= 0 || framesObserved.get(tabId) === report.pageUrl) {
+      return;
+    }
+    framesObserved.set(tabId, report.pageUrl);
+    void browser.scripting
+      .executeScript({ target: { tabId, allFrames: true }, files: [CONTENT_SCRIPT_FILE] })
+      .catch(() => undefined);
   };
 
   const clearTab = (tabId: number): void => {
@@ -261,6 +291,7 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
 
   /** Fully drop a gone tab: invalidate its in-flight run, cache, state, and badge. */
   const dropTab = (tabId: number): void => {
+    framesObserved.delete(tabId);
     runTokens.delete(tabId); // a still-in-flight run for this tab fails its token check
     engine.invalidate(tabId);
     state.removeTab(tabId);
@@ -270,6 +301,7 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   const onNavigate = (tabId: number, url: string | undefined): void => {
     // A new page means new resources; what was identified for the old one is noise.
     deps.probe?.forget();
+    framesObserved.delete(tabId);
     // Navigation invalidates the tab's cached detection; the content script
     // re-observes the new page and reports fresh signals (§9.9, §8.10). Bumping the
     // token cancels any in-flight run for the previous page.

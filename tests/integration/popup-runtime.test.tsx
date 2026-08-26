@@ -213,7 +213,9 @@ describe('popup over the background runtime', () => {
     await flush();
 
     // Opening the popup is the user gesture that permits observation (§13.7); the
-    // background injects the content script into the active tab (§8.10).
+    // background injects the content script into every frame of the active tab, because
+    // a page's player is frequently in an iframe and the top document holds no media
+    // at all (§8.10).
     expect(fake.scripting.executed).toEqual([{ target: { tabId: TAB }, files: ['content.js'] }]);
     expect(texts(view.container, '.adl-card__title')).toEqual([]);
 

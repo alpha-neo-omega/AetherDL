@@ -84,14 +84,18 @@ describe('background detection runtime', () => {
     expect(refreshed).toHaveLength(2);
   });
 
-  it('detection/refresh injects the content-script observer into the tab (§8.10)', async () => {
+  it('detection/refresh injects the content-script observer into EVERY frame (§8.10)', async () => {
     const { fake, client } = setup();
     fake.setTabs([{ id: 3, active: true, url: 'https://x.com/a', windowId: 1 }]);
 
     await client.send('detection/refresh', { tabId: 3 });
 
     // The gesture-backed refresh is what puts the observer on the page; without it
-    // the page is never observed and detection has nothing to work from.
+    // the page is never observed and detection has nothing to work from. `allFrames`
+    // is load-bearing: a video host wraps its player in an `/embed/` iframe, so the top
+    // document holds no media and the playlist is fetched inside the frame.
+    // The top document only. Frames are reached separately, and only once a page has
+    // said it has any — see the frame tests below.
     expect(fake.scripting.executed).toEqual([{ target: { tabId: 3 }, files: ['content.js'] }]);
   });
 
@@ -568,5 +572,79 @@ describe('background detection runtime — identifying what the page fetched (AD
     );
 
     expect(probe.forgotten()).toBeGreaterThan(0);
+  });
+});
+
+describe('background detection runtime — reaching into frames (§8.10)', () => {
+  const PAGE = 'https://site.test/watch';
+
+  const framedReport = (frames: number): DetectionReport =>
+    report({ pageUrl: PAGE, ...(frames > 0 && { frameCount: frames }) });
+
+  it('does not touch frames on a page that has none', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send('detection/run', framedReport(0));
+    await flush();
+
+    // Reaching into frames is markedly slower on some engines; paying it on every
+    // page — nearly all of which have no frames — starved the rest of the runtime.
+    expect(fake.scripting.executed.filter((call) => call.target.allFrames === true)).toEqual([]);
+  });
+
+  it('reaches into frames once a page reports having them', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send('detection/run', framedReport(1));
+    await flush();
+
+    expect(fake.scripting.executed).toContainEqual({
+      target: { tabId: 7, allFrames: true },
+      files: ['content.js'],
+    });
+  });
+
+  it('reaches into the frames of one page only once, however often it reports', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send('detection/run', framedReport(2));
+    await client.send('detection/run', framedReport(2));
+    await client.send('detection/run', framedReport(3));
+    await flush();
+
+    // The content script re-reports on every mutation; re-injecting each time would
+    // put an injection on the critical path of every DOM change.
+    expect(fake.scripting.executed.filter((call) => call.target.allFrames === true)).toHaveLength(
+      1,
+    );
+  });
+
+  it('reaches into frames again after the tab navigates', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send('detection/run', framedReport(1));
+    fake.onUpdated.trigger(
+      7,
+      {},
+      { id: 7, url: 'https://site.test/other', active: true, windowId: 1 },
+    );
+    fake.setTabs([{ id: 7, active: true, url: 'https://site.test/other', windowId: 1 }]);
+    await client.send(
+      'detection/run',
+      report({ pageUrl: 'https://site.test/other', frameCount: 1 }),
+    );
+    await flush();
+
+    expect(fake.scripting.executed.filter((call) => call.target.allFrames === true)).toHaveLength(
+      2,
+    );
   });
 });

@@ -90,6 +90,7 @@ function start(): void {
     pageUrl: () => location.href,
     documentTitle: () => document.title,
     observedResources,
+    frameCount: () => document.querySelectorAll('iframe, frame').length,
     sendReport: (report) => {
       void bus.send('detection/run', report).catch(() => undefined);
     },

@@ -246,6 +246,14 @@ export interface DetectionReport {
   readonly observedUrls: readonly string[];
   /** What the page fetched, for identification by content rather than by name. */
   readonly observedResources?: readonly WireObservedResource[];
+  /**
+   * How many frames this document embeds.
+   *
+   * The background injects into frames only when a page says it has any: reaching into
+   * frames is markedly slower on some engines, and paying that on every page — most of
+   * which have none — measurably starved the rest of the runtime (§7.2, §12.1).
+   */
+  readonly frameCount?: number;
 }
 
 /**

@@ -64,17 +64,36 @@ test.describe('manual matrix — Firefox', () => {
   async function detectAndEnqueue(
     urls: readonly string[],
     extra: Record<string, unknown> = {},
-  ): Promise<{ items: { id: string; status: string }[]; queued: QueuedTask[] }> {
+  ): Promise<{ items: { id: string; status: string; url: string }[]; queued: QueuedTask[] }> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await firefox.open('popup.html');
-      const items = await firefox.asyncScript<{ id: string; status: string }[]>(
+      // Start each case from an empty queue, INCLUDING whatever is still in flight.
+      // Some cases deliberately leave a slow or failing transfer running, and with a
+      // concurrency limit of two those hold the queue closed for the next case, which
+      // then times out waiting behind work it never asked for. Cancelling first is what
+      // makes each case independent; clearing alone only removes what already stopped.
+      await firefox.asyncScript(
+        'const found = await browser.runtime.sendMessage({ __aetherdl_msg__: true, kind: "request", type: "download/query", payload: undefined, id: String(Math.random()) });' +
+          'for (const task of (found && found.payload) || []) {' +
+          '  await browser.runtime.sendMessage({ __aetherdl_msg__: true, kind: "request", type: "download/cancel", payload: { taskId: task.id }, id: String(Math.random()) });' +
+          '}' +
+          'return true;',
+      );
+      await firefox.asyncScript(requestScript('download/clear', undefined));
+      const items = await firefox.asyncScript<{ id: string; status: string; url: string }[]>(
         requestScript('detection/run', report(site.origin, urls, extra)),
       );
       if (items.length === 0) {
         continue;
       }
+      // Only the media this case asked about. Detection legitimately reports more than
+      // the synthetic report contains — the tab's real page and its frames are merged
+      // into one view (§4.1) — and enqueueing all of it would have each case downloading
+      // the previous case's media too.
+      const wanted = items.filter((item) => urls.some((url) => item.url === url));
+      const chosen = wanted.length > 0 ? wanted : items;
       await firefox.asyncScript(
-        requestScript('download/enqueue', { itemIds: items.map((item) => item.id) }),
+        requestScript('download/enqueue', { itemIds: chosen.map((item) => item.id) }),
       );
       const queued = await queue();
       if (queued.length > 0) {

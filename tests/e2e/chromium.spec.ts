@@ -405,3 +405,69 @@ test.describe('AetherDL identifies a stream that hides behind its file names', (
     await popup.close();
   });
 });
+
+test.describe('AetherDL sees a player that lives in an iframe', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  let extension: LoadedExtension;
+  let site: FixtureSite;
+
+  test.beforeAll(async () => {
+    site = await startFixtureSite();
+    extension = await loadChromiumExtension();
+  });
+
+  test.afterAll(async () => {
+    await extension.close();
+    await site.close();
+  });
+
+  test('the top frame holds nothing, and the frame holds everything', async () => {
+    // Exactly the shape that made a real site undetectable: the watch page has no
+    // <video> at all, and the player — with its blob: URL and its disguised playlist —
+    // is inside a same-origin iframe.
+    const page = await extension.context.newPage();
+    await stubMessaging(page);
+    await page.goto(`${site.origin}/framed.html`);
+
+    const top = await page.evaluate(() => ({
+      videos: document.querySelectorAll('video').length,
+      iframes: document.querySelectorAll('iframe').length,
+    }));
+    expect(top).toStrictEqual({ videos: 0, iframes: 1 });
+
+    // The extension injects with `allFrames: true`; automation cannot make the toolbar
+    // gesture that grants that, so the shipped bundle is loaded into each frame here —
+    // which is what `allFrames` does.
+    for (const frame of page.frames()) {
+      await frame
+        .addScriptTag({ path: join(distDir('chrome'), 'content.js') })
+        .catch(() => undefined);
+    }
+
+    // Each frame keeps its own report buffer, exactly as each frame runs its own copy
+    // of the content script.
+    const reports = await until(
+      'the framed player to report',
+      async () => {
+        const collected: DetectionReport[] = [];
+        for (const frame of page.frames()) {
+          const found = await frame
+            .evaluate(() => (globalThis as ReportWindow).__adlReports ?? [])
+            .catch(() => [] as DetectionReport[]);
+          collected.push(...found);
+        }
+        return collected;
+      },
+      (value) => value.some((entry) => entry.pageUrl.endsWith('/disguised.html')),
+      15_000,
+    );
+    // The frame's report is the one carrying the media; the top frame's is empty.
+    const framed = reports.find((entry) => entry.pageUrl.endsWith('/disguised.html'));
+    expect(framed, 'the frame must report in its own right').toBeDefined();
+    expect(
+      framed?.observedResources?.some((r) => r.url.endsWith('/media/disguised/master.txt')),
+    ).toBe(true);
+    await page.close();
+  });
+});

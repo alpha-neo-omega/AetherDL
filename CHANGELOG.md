@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] — Media inside an iframe is found
+
+### Fixed
+
+- **A player inside an iframe was invisible.** The observer only ever ran in the top document, so a
+  page that wraps its player in an `/embed/` iframe — which is how the video host that prompted
+  1.5.0 is built, and how most embedded players anywhere are delivered — reported nothing at all.
+  The top frame holds no `<video>`, and the playlist is fetched inside the frame where the top
+  frame's Resource Timing cannot see it either. Confirmed from the real page: `videos: 0,
+  iframes: 1`.
+  - The observer now runs in **every frame the engine allows**. The top document is injected first
+    and awaited; frames follow as a separate, best-effort injection, because engines differ sharply
+    here — one of them is slow enough about frames under `activeTab` to hold up the whole refresh,
+    which measurably starved the rest of the runtime.
+  - Frames are reached **only when a page reports having any**, and **once per page**. A page
+    without frames pays nothing.
+  - The background keeps **one report per frame**, keyed by the frame's URL, and merges them into
+    the single view detection runs over. A later report from one frame no longer erases what
+    another observed, and navigation clears them together.
+
+### Verification
+
+`npm run ci` exits 0 — 1259 unit tests, 69 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 60 browser e2e cases.
+
+A new browser case reproduces the real shape: a watch page holding **no** media, wrapping the
+disguised player in a same-origin iframe. It asserts the top frame is empty (`videos: 0,
+iframes: 1`) and that the frame reports the disguised playlist in its own right.
+
+Two things this shook out, both fixed rather than worked around:
+
+- Firefox is markedly slower to reach into frames than Chromium, and injecting on every refresh
+  starved a download test until it timed out. That is why frames are now conditional and
+  best-effort — measured, not assumed.
+- The Firefox test harness enqueued **every** detected item, which was harmless while detection saw
+  only what the harness reported and became wrong once frames and the page's own media were merged.
+  It now enqueues what each case asked for, and clears the queue between cases.
+
+
 ## [1.5.0] — Media is found by its bytes, not its file name
 
 ### Added

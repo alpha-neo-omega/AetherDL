@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Watch — framed player</title>
+  </head>
+  <body>
+    <h1>Watch</h1>
+    <!--
+      The shape the real site uses: the watch page holds NO media of its own, and wraps
+      its player in a same-origin `/embed/` iframe. The top document therefore has no
+      <video>, and the playlist is fetched inside the frame — where the top frame's
+      Resource Timing cannot see it either.
+    -->
+    <iframe src="/disguised.html" width="640" height="360" title="player"></iframe>
+  </body>
+</html>
