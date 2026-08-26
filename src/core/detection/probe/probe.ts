@@ -10,7 +10,13 @@
  *          core/detection/pipeline (NetworkResource), core/detection/probe (contract).
  * Public API: createResourceProbe.
  */
-import { sniffFormat, SNIFF_PREFIX_BYTES, type SniffedFormat } from '@shared/utils';
+import {
+  sniffFormat,
+  sniffHlsRole,
+  SNIFF_PREFIX_BYTES,
+  type HlsPlaylistRole,
+  type SniffedFormat,
+} from '@shared/utils';
 import type { NetworkResource } from '@core/detection/pipeline';
 import {
   PROBE_MAX_MEDIA_RESULTS,
@@ -58,6 +64,31 @@ const MIME_OF_FORMAT: Readonly<Record<SniffedFormat, string>> = {
   adts: 'audio/aac',
 };
 
+/** What a probe concluded about one URL. */
+interface Identified {
+  readonly resource: NetworkResource;
+  /** For HLS only: whether this playlist lists renditions or segments. */
+  readonly role?: HlsPlaylistRole;
+}
+
+/**
+ * The directory a URL lives in — origin plus everything but the last path segment.
+ *
+ * A master and the renditions it names are published side by side, so this is what
+ * decides that two playlists belong to the same stream. Comparing whole URLs would
+ * never match; comparing only origins would fold two unrelated streams on one CDN into
+ * one.
+ */
+function groupOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.split('/').slice(0, -1).join('/');
+    return `${parsed.origin}${path}`;
+  } catch {
+    return url;
+  }
+}
+
 function isHttpUrl(url: string): boolean {
   return url.startsWith('http://') || url.startsWith('https://');
 }
@@ -86,10 +117,14 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
   const maxPerRun = options.maxPerRun ?? PROBE_MAX_PER_RUN;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxCache = options.maxCacheEntries ?? DEFAULT_MAX_CACHE;
-  /** url → what it turned out to be, or `null` for "looked, and it is not media". */
-  const identified = new Map<string, NetworkResource | null>();
+  /**
+   * url → what it turned out to be, or `null` for "looked, and it is not media".
+   * The playlist role rides along so a rendition can be recognised as belonging to a
+   * master that is also on the page.
+   */
+  const identified = new Map<string, Identified | null>();
 
-  const remember = (url: string, value: NetworkResource | null): void => {
+  const remember = (url: string, value: Identified | null): void => {
     if (identified.size >= maxCache) {
       // Oldest first: insertion order is Map's iteration order.
       const oldest = identified.keys().next().value;
@@ -103,7 +138,7 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
   const probeOne = async (
     resource: ObservedResource,
     signal: AbortSignal | undefined,
-  ): Promise<NetworkResource | null> => {
+  ): Promise<Identified | null> => {
     try {
       const response = await http.get(resource.url, {
         // A plain GET that stops reading, NOT a `Range` request. `Range` is not
@@ -121,11 +156,17 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
         return null;
       }
       return {
-        url: response.url,
-        mimeType: MIME_OF_FORMAT[format],
-        statusCode: response.status,
-        ...(resource.sizeBytes !== undefined &&
-          resource.sizeBytes > 0 && { sizeBytes: resource.sizeBytes }),
+        resource: {
+          url: response.url,
+          mimeType: MIME_OF_FORMAT[format],
+          statusCode: response.status,
+          ...(resource.sizeBytes !== undefined &&
+            resource.sizeBytes > 0 && { sizeBytes: resource.sizeBytes }),
+        },
+        ...(format === 'hls' &&
+          sniffHlsRole(response.bytes) !== undefined && {
+            role: sniffHlsRole(response.bytes) as HlsPlaylistRole,
+          }),
       };
     } catch {
       // A refused range, a CORS rejection, a timeout, an origin that is simply gone:
@@ -143,11 +184,28 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
    * fragments of a single video (§4.2). With no manifest, a few standalone media files
    * are still worth surfacing.
    */
-  const summarise = (found: readonly NetworkResource[]): readonly NetworkResource[] => {
+  const summarise = (found: readonly Identified[]): readonly NetworkResource[] => {
     const manifests = found.filter(
-      (resource) => resource.mimeType !== undefined && MANIFEST_MIMES.has(resource.mimeType),
+      (entry) =>
+        entry.resource.mimeType !== undefined && MANIFEST_MIMES.has(entry.resource.mimeType),
     );
-    return manifests.length > 0 ? manifests : found.slice(0, PROBE_MAX_MEDIA_RESULTS);
+    if (manifests.length === 0) {
+      return found.slice(0, PROBE_MAX_MEDIA_RESULTS).map((entry) => entry.resource);
+    }
+    // A player fetches the master playlist and then a rendition inside it, so a page
+    // yields both. Two entries for one video is worse than one: keep the master, which
+    // carries every rendition and is what the quality chooser enumerates (§10.6). Only
+    // renditions that sit beside a master are dropped — a page serving a media playlist
+    // on its own still has it offered.
+    const mastersByGroup = new Set(
+      manifests
+        .filter((entry) => entry.role === 'master')
+        .map((entry) => groupOf(entry.resource.url)),
+    );
+    const kept = manifests.filter(
+      (entry) => entry.role !== 'media' || !mastersByGroup.has(groupOf(entry.resource.url)),
+    );
+    return (kept.length > 0 ? kept : manifests).map((entry) => entry.resource);
   };
 
   return {
@@ -155,7 +213,7 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
       resources: readonly ObservedResource[],
       signal?: AbortSignal,
     ): Promise<readonly NetworkResource[]> {
-      const found: NetworkResource[] = [];
+      const found: Identified[] = [];
       const pending: ObservedResource[] = [];
       const seen = new Set<string>();
 

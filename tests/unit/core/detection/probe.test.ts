@@ -284,3 +284,55 @@ describe('core/detection resource probe', () => {
     expect(http.requested).toStrictEqual([]);
   });
 });
+
+describe('core/detection probe — one stream, one entry', () => {
+  const MASTER = utf8('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nindex_1080p.txt\n');
+  const MEDIA = utf8('#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg-1.css\n');
+
+  it('keeps the master and drops the rendition beside it', async () => {
+    // A player fetches the master and then a rendition inside it, so a page yields
+    // both. Two cards for one video is worse than one, and the master is the one that
+    // carries every rendition for the quality chooser.
+    const http = stubHttp({
+      'https://cdn.test/v/master.txt': MASTER,
+      'https://cdn.test/v/index_1080p.txt': MEDIA,
+    });
+
+    const found = await createResourceProbe({ http: http.client }).identify([
+      observed('https://cdn.test/v/index_1080p.txt'),
+      observed('https://cdn.test/v/master.txt'),
+    ]);
+
+    expect(found.map((r) => r.url)).toStrictEqual(['https://cdn.test/v/master.txt']);
+  });
+
+  it('keeps a media playlist that has no master beside it', async () => {
+    // A page serving one media playlist on its own must still offer it.
+    const http = stubHttp({ 'https://cdn.test/v/only.txt': MEDIA });
+
+    const found = await createResourceProbe({ http: http.client }).identify([
+      observed('https://cdn.test/v/only.txt'),
+    ]);
+
+    expect(found.map((r) => r.url)).toStrictEqual(['https://cdn.test/v/only.txt']);
+  });
+
+  it('does not let one stream suppress another stream elsewhere on the page', async () => {
+    // Two unrelated streams live in different directories; a master in one says nothing
+    // about a rendition in the other.
+    const http = stubHttp({
+      'https://cdn.test/a/master.txt': MASTER,
+      'https://cdn.test/b/index.txt': MEDIA,
+    });
+
+    const found = await createResourceProbe({ http: http.client }).identify([
+      observed('https://cdn.test/a/master.txt'),
+      observed('https://cdn.test/b/index.txt'),
+    ]);
+
+    expect(found.map((r) => r.url).sort()).toStrictEqual([
+      'https://cdn.test/a/master.txt',
+      'https://cdn.test/b/index.txt',
+    ]);
+  });
+});

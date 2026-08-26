@@ -1,10 +1,10 @@
-# AetherDL 1.6.0 — Release Audit
+# AetherDL 1.7.0 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.6.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> against the `1.7.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
 > 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, split-track stream muxing in
 > 1.3.0, user-chosen stream renditions with MPEG-TS and packed-audio demultiplexing in 1.4.0, and
 > — new in 1.5.0 — identifying media by its BYTES rather than by its file name, which is the first
@@ -41,19 +41,19 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.6.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched. And 1.6.0 observes every frame the engine allows: a player inside an `/embed/` iframe — the usual arrangement — was previously invisible |
+| Version | `1.7.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched. And 1.6.0 observes every frame the engine allows: a player inside an `/embed/` iframe — the usual arrangement — was previously invisible. 1.7.0 offers one card per video: the unfetchable `blob:` handle is not listed beside the stream feeding it, and a stream is offered as its master playlist rather than once per rendition |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.6.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1259 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 60 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.7.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1269 unit/integration tests, 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 60 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 | Also executed, outside the gate | `npm run test:live`, **re-run at 1.5.0** because sniffing changed how every case decides what a resource is: **9 cases, all passed**, no verdict changed. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.6.0-chrome.zip` | 141 239 | 20 | `2a5125bfd2ab3c5924e88f4fe493c20d7818d101e3764cbf6b252058783c0ea4` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.6.0-firefox.zip` | 141 305 | 20 | `bb51f9f0ae949b330d4820cfc65296b167ccc8fcba4eda5583420cf4134f7b39` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.7.0-chrome.zip` | 141 534 | 20 | `b072ce925238e06c847c8fe6784489b6bbd8c6ec65b28238e0e443d1bf19e96e` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.7.0-firefox.zip` | 141 600 | 20 | `eb482038c54b87cca7258e7f7ed2e0b6ed7ec737059d3fee66b38ed7aaf2c03d` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.
@@ -265,11 +265,11 @@ which is new in this release; it holds no UI and no React, so it is held to the 
 
 ## 5. Test evidence for this release
 
-`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1259 unit +
+`npm run ci` exits 0 on this build: typecheck, ESLint (zero warnings), Prettier, 1269 unit +
 integration + accessibility + regression tests, 69 performance tests, both builds, both manifest
 validations, the security gate, packaging, and 60 browser e2e tests (Chromium and Firefox, including
 the eight checks in `tests/e2e/release-chromium.spec.ts` summarised in §4). Coverage, measured by
-`npm run test:coverage` (which `ci` does not run): 96.25 % statements, 90.79 % branches.
+`npm run test:coverage` (which `ci` does not run): 96.26 % statements, 90.83 % branches.
 
 Branch coverage is lower than at `1.3.0`, and the reason is worth stating rather than smoothing
 over: the new format code reads bytes one at a time behind a defensive fallback per read

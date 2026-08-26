@@ -67,6 +67,18 @@ test.describe('manual matrix — Firefox', () => {
   ): Promise<{ items: { id: string; status: string; url: string }[]; queued: QueuedTask[] }> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await firefox.open('popup.html');
+      // Start each case from a clean tab. Cases deliberately report contradictory
+      // things about the same URL — one marks it encrypted, another does not — and the
+      // background legitimately keeps a tab's last observations so a refresh can replay
+      // them. Without clearing, a later case can enqueue the earlier case's verdict.
+      await firefox.asyncScript(
+        'const tabs = await browser.tabs.query({ active: true, lastFocusedWindow: true });' +
+          'const id = tabs[0] && tabs[0].id;' +
+          'if (id !== undefined) {' +
+          '  await browser.runtime.sendMessage({ __aetherdl_msg__: true, kind: "request", type: "detection/clear", payload: { tabId: id }, id: String(Math.random()) });' +
+          '}' +
+          'return true;',
+      );
       // Start each case from an empty queue, INCLUDING whatever is still in flight.
       // Some cases deliberately leave a slow or failing transfer running, and with a
       // concurrency limit of two those hold the queue closed for the next case, which

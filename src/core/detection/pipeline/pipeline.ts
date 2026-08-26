@@ -100,6 +100,36 @@ function compareItems(a: MediaItem, b: MediaItem): number {
   return a.url.localeCompare(b.url);
 }
 
+/**
+ * Drop the `blob:`/MediaSource entry when the stream behind it is already listed.
+ *
+ * They are the same video. The blob is what the PAGE holds in memory — a handle no
+ * one outside the page can fetch, which is why it is marked unsupported — while the
+ * stream is the addressable source being fed into it. Showing both puts an
+ * undownloadable card above the working one and invites exactly the question it
+ * provokes: "why can I download that one and not this one?" (§4.2, §11.6).
+ *
+ * Only blob/MediaSource entries are dropped, and only when a supported stream is
+ * present. DRM refusals stay visible whatever else is on the page: "this is protected"
+ * is information the user needs, not noise (§6.3, §2.8).
+ *
+ * Applied by the manager AFTER it has emitted its events, so what was detected is still
+ * observable even when it is not offered — the rule is about what to show a person, not
+ * about pretending the detector found nothing (§9.1).
+ */
+export function withoutRedundantBlobs(items: readonly MediaItem[]): readonly MediaItem[] {
+  const hasStream = items.some((item) => item.status === 'supported' && item.kind === 'stream');
+  if (!hasStream) {
+    return items;
+  }
+  return items.filter(
+    (item) =>
+      item.status === 'supported' ||
+      item.delivery !== 'media-source' ||
+      item.unsupportedReason?.includes('Encrypted') === true,
+  );
+}
+
 export function createDetectionPipeline(options: PipelineOptions): DetectionPipeline {
   const { scorer, deduplicator, metadataExtractor, clock, onReject } = options;
 

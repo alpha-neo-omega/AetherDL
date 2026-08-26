@@ -146,14 +146,16 @@ describe('detection engine (integration)', () => {
     expect(deliveries).toContain('hls');
     expect(deliveries).toContain('dash');
     expect(deliveries).toContain('progressive');
-    expect(deliveries).toContain('media-source');
     expect(manifestDetected).toHaveBeenCalledTimes(2);
     expect(networkDetected).toHaveBeenCalledTimes(1);
+    // The MediaSource element is still DETECTED — the detector runs and the event
+    // fires — but it is not offered to the user, because the streams feeding it are
+    // right there in the same list. It is the same video behind a handle nothing
+    // outside the page can fetch, so listing it puts an undownloadable card above the
+    // working ones (§4.2, §11.6).
     expect(mseDetected).toHaveBeenCalledTimes(1);
     expect(correlationComplete).toHaveBeenCalled();
-
-    const mse = items.find((item) => item.delivery === 'media-source');
-    expect(mse?.status).toBe('unsupported');
+    expect(deliveries).not.toContain('media-source');
     await engine.dispose();
   });
 

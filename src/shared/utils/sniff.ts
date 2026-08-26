@@ -15,8 +15,8 @@
  *          recognises containers only: an encrypted stream is still refused by the
  *          parsers, and nothing here can decrypt anything (§6, ADR-005).
  * Dependencies: none.
- * Public API: SNIFF_PREFIX_BYTES, SniffedFormat, sniffFormat, isStreamManifestFormat,
- *          containerOfFormat.
+ * Public API: SNIFF_PREFIX_BYTES, SniffedFormat, HlsPlaylistRole, sniffFormat,
+ *          sniffHlsRole, isStreamManifestFormat, containerOfFormat.
  */
 
 /**
@@ -30,6 +30,9 @@ export const SNIFF_PREFIX_BYTES = 1024;
 
 /** What a prefix turned out to be, or `undefined` when nothing matched. */
 export type SniffedFormat = 'hls' | 'dash' | 'mpeg-ts' | 'mp4' | 'webm' | 'adts';
+
+/** A master playlist lists renditions; a media playlist lists segments. */
+export type HlsPlaylistRole = 'master' | 'media';
 
 /** One transport-stream packet; the sync byte repeats at this interval. */
 const TS_PACKET_SIZE = 188;
@@ -164,6 +167,26 @@ export function sniffFormat(bytes: Uint8Array): SniffedFormat | undefined {
     return 'dash';
   }
   return undefined;
+}
+
+/**
+ * Which kind of HLS playlist this is.
+ *
+ * A master lists renditions (`#EXT-X-STREAM-INF`); a media playlist lists segments
+ * (`#EXTINF`). Both are `#EXTM3U`, and a player fetches the master and then the
+ * rendition inside it — so a page yields both, and offering the user two entries for
+ * one video is worse than offering one. The master is the one to keep: it carries every
+ * rendition, which is what the quality chooser enumerates (§10.6).
+ *
+ * `undefined` when the prefix shows neither, which is not a judgement — a very long
+ * header can push the first tag past what was read.
+ */
+export function sniffHlsRole(bytes: Uint8Array): HlsPlaylistRole | undefined {
+  const text = ascii(bytes, 0, Math.min(bytes.byteLength, SNIFF_PREFIX_BYTES));
+  if (text.includes('#EXT-X-STREAM-INF')) {
+    return 'master';
+  }
+  return text.includes('#EXTINF') ? 'media' : undefined;
 }
 
 /** Whether a sniffed format is a manifest that assembly would have to read. */

@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] — One card per video
+
+### Changed
+
+- **The `blob:` card is no longer offered when the stream behind it is listed.** They are the same
+  video: one is a handle the page holds in memory, which nothing outside the page can ever fetch,
+  and the other is the addressable source being fed into it. Showing both put a permanently
+  undownloadable card above the working one, and invited exactly the question it provoked — "why can
+  I download that one and not this one?". The blob is still listed when there is no stream to
+  replace it, because "this page has media I cannot resolve" is useful; and a **DRM refusal is never
+  hidden**, whatever else is on the page, because "this is protected" is information, not noise.
+  Detection still reports it and still emits its events — the rule is about what to offer a person,
+  not about pretending nothing was found.
+- **A stream is offered once, not once per rendition.** A player fetches the master playlist and
+  then a rendition inside it, so a page yields both and two identical-looking cards appeared. The
+  master is kept — it carries every rendition, which is what the quality chooser enumerates — and
+  renditions published beside it are dropped. Decided from the **bytes**: a master carries
+  `#EXT-X-STREAM-INF`, a media playlist carries `#EXTINF`. A page serving a media playlist on its
+  own still has it offered.
+- **A page title no longer donates a container it does not have.** A host that serves its playlist
+  as `.txt` often titles the page after the uploaded file — `1080.mp4` — and carrying that through
+  labelled an HLS stream with a container it is not, then saved it as `1080.mp4.ts`. The extension
+  is stripped from a page-derived title; the real one is decided by the segments' own bytes.
+
+### Verification
+
+`npm run ci` exits 0 — 1269 unit tests, 69 performance assertions, both builds, manifest validation,
+the security gate (PASS on both targets), packaging, 60 browser e2e cases. Coverage 96.26 %.
+
+Two test-harness defects were fixed rather than worked around, both of which had been hiding
+cross-case contamination: the Firefox matrix left transfers in flight that blocked the next case's
+queue, and it inherited the previous case's detection state — which is how a case that deliberately
+marks media as DRM-protected could make a later download case fail. Each case now starts from a
+cleared tab and an empty queue.
+
+
 ## [1.6.0] — Media inside an iframe is found
 
 ### Fixed

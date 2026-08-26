@@ -16,6 +16,7 @@ import type { Detector } from '@core/detection/detectors';
 import { DetectorFailure } from '@core/detection/errors';
 import type { DetectionEventMap, DetectorManager } from '@core/detection/manager';
 import type { DetectionContext, DetectionPipeline, RawCandidate } from '@core/detection/pipeline';
+import { withoutRedundantBlobs } from '@core/detection/pipeline/pipeline';
 
 export interface DetectorManagerOptions {
   readonly emitter: TypedEventEmitter<DetectionEventMap>;
@@ -175,11 +176,15 @@ export function createDetectorManager(options: DetectorManagerOptions): Detector
           corroboratedCount += 1;
         }
       }
-      emitter.emit('metadata:enriched', { itemCount: items.length });
-      emitter.emit('correlation:complete', { itemCount: items.length, corroboratedCount });
-      cache.set(context.tabId, items, context.pageUrl);
-      emitter.emit('detection:finished', { context, items, fromCache: false });
-      return items;
+      // Everything detected has now been announced. What SURFACES get is narrower: a
+      // `blob:` handle is the same video as the stream feeding it and can never be
+      // fetched, so it is not offered when that stream is in the same list (§4.2).
+      const offered = withoutRedundantBlobs(items);
+      emitter.emit('metadata:enriched', { itemCount: offered.length });
+      emitter.emit('correlation:complete', { itemCount: offered.length, corroboratedCount });
+      cache.set(context.tabId, offered, context.pageUrl);
+      emitter.emit('detection:finished', { context, items: offered, fromCache: false });
+      return offered;
     },
 
     invalidate(tabId: number): void {

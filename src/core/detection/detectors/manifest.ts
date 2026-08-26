@@ -12,6 +12,7 @@
  * manifest type) to avoid duplication while exposing the two Bible §9.2 ids.
  */
 import {
+  isSupportedExtension,
   getExtension,
   manifestTypeFromMime,
   manifestTypeFromUrl,
@@ -62,8 +63,9 @@ function collect(context: DetectionContext, spec: ManifestSpec): RawCandidate[] 
       // With no usable name in the URL, the page's own title is the honest label —
       // better than showing the user "playlist.txt".
       ...(!honestExtension &&
-        context.documentTitle !== undefined &&
-        context.documentTitle !== '' && { title: context.documentTitle }),
+        titleFromPage(context.documentTitle) !== undefined && {
+          title: titleFromPage(context.documentTitle) as string,
+        }),
       ...(mime !== undefined && { mimeType: mime }),
       ...(encrypted === true && { encrypted: true }),
     });
@@ -83,6 +85,28 @@ function collect(context: DetectionContext, spec: ManifestSpec): RawCandidate[] 
     }
   }
   return candidates;
+}
+
+/**
+ * The page's title, without a trailing media extension.
+ *
+ * A host that names its playlist `.txt` often titles the page after the uploaded file —
+ * "1080.mp4" — and carrying that through would label an HLS stream with a container it
+ * is not, and then save it as `1080.mp4.ts`. The real extension is decided by the
+ * segments' own bytes at assembly time (§10.7, §2.8).
+ */
+function titleFromPage(documentTitle: string | undefined): string | undefined {
+  if (documentTitle === undefined || documentTitle.trim() === '') {
+    return undefined;
+  }
+  const title = documentTitle.trim();
+  const dot = title.lastIndexOf('.');
+  if (dot <= 0) {
+    return title;
+  }
+  const extension = title.slice(dot + 1).toLowerCase();
+  const stripped = title.slice(0, dot).trim();
+  return isSupportedExtension(extension) && stripped !== '' ? stripped : title;
 }
 
 function hasManifest(context: DetectionContext, type: ManifestType): boolean {

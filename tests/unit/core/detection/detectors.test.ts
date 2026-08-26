@@ -1,3 +1,4 @@
+import type { DetectionContext } from '@core/detection/pipeline';
 import { describe, expect, it } from 'vitest';
 import { createBlobMediaDetector } from '@core/detection/detectors/blob-media';
 import { createDirectUrlDetector } from '@core/detection/detectors/direct-url';
@@ -358,5 +359,50 @@ describe('detector metadata', () => {
       expect(meta?.enabled).toBe(true);
       expect(meta?.supportedKinds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('manifest detectors — the page title is not a container claim (§2.8, §10.7)', () => {
+  const context = (documentTitle: string, url: string): DetectionContext => ({
+    tabId: 1,
+    pageUrl: 'https://site.test/embed/abc',
+    documentTitle,
+    domSignals: [],
+    observedUrls: [],
+    networkResources: [{ url, mimeType: 'application/vnd.apple.mpegurl' }],
+    source: 'dom',
+    timestamp: 0,
+  });
+
+  it('strips a media extension the page title only pretends to have', async () => {
+    // A host that serves its playlist as `.txt` often titles the page after the
+    // uploaded file — "1080.mp4". Carrying that through labels an HLS stream with a
+    // container it is not, and then saves it as `1080.mp4.ts`.
+    const detector = createHlsManifestDetector();
+    const candidates = await detector.detect(
+      context('1080.mp4', 'https://cdn.test/v/index_avc_1080p.txt'),
+    );
+
+    expect(candidates[0]?.title).toBe('1080');
+  });
+
+  it('leaves a title that is not pretending alone', async () => {
+    const detector = createHlsManifestDetector();
+    const candidates = await detector.detect(
+      context('Episode 4 — The Reckoning', 'https://cdn.test/v/index.txt'),
+    );
+
+    expect(candidates[0]?.title).toBe('Episode 4 — The Reckoning');
+  });
+
+  it('does not take a title at all when the URL is honest about itself', async () => {
+    // `master.m3u8` names itself; the page title would be a worse label than the file.
+    const detector = createHlsManifestDetector();
+    const candidates = await detector.detect(
+      context('Some Page', 'https://cdn.test/v/master.m3u8'),
+    );
+
+    expect(candidates[0]?.title).toBeUndefined();
+    expect(candidates[0]?.container).toBe('m3u8');
   });
 });

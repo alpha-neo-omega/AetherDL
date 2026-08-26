@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeduplicator } from '@core/detection/dedupe/dedupe';
 import { createMetadataExtractor } from '@core/detection/metadata/metadata';
+import type { MediaItem } from '@shared/types';
 import type { DetectionPipeline, RawCandidate } from '@core/detection/pipeline';
-import { createDetectionPipeline } from '@core/detection/pipeline/pipeline';
+import { createDetectionPipeline, withoutRedundantBlobs } from '@core/detection/pipeline/pipeline';
 import { createScorer } from '@core/detection/scoring/scoring';
 import type { PlatformError } from '@shared/result/errors';
 import { context } from './_fixtures';
@@ -137,5 +138,72 @@ describe('detection pipeline', () => {
     for (let i = 1; i < items.length; i += 1) {
       expect(items[i - 1]!.score).toBeGreaterThanOrEqual(items[i]!.score);
     }
+  });
+});
+
+describe('core/detection — the blob card is not shown twice (§4.2, §11.6)', () => {
+  const item = (props: Partial<MediaItem>): MediaItem => ({
+    id: props.url ?? 'id',
+    kind: 'video',
+    status: 'supported',
+    title: 'x',
+    url: 'https://cdn.test/a.mp4',
+    originHost: 'cdn.test',
+    detectedBy: 'html5-video',
+    score: 0.5,
+    discoveredAt: 0,
+    ...props,
+  });
+
+  const blob = (extra: Partial<MediaItem> = {}): MediaItem =>
+    item({
+      url: 'blob:https://site.test/479022f1',
+      status: 'unsupported',
+      delivery: 'media-source',
+      unsupportedReason:
+        'Blob / MediaSource media cannot be resolved within the extension security model.',
+      detectedBy: 'media-source',
+      ...extra,
+    });
+
+  const stream = (): MediaItem =>
+    item({ url: 'https://cdn.test/v/master.txt', kind: 'stream', delivery: 'hls' });
+
+  it('hides the unresolvable blob when the stream behind it is listed', () => {
+    // Same video: one is a handle the page holds in memory, the other the addressable
+    // source feeding it. Showing both put an undownloadable card above the working one.
+    const kept = withoutRedundantBlobs([blob(), stream()]);
+
+    expect(kept.map((entry) => entry.kind)).toStrictEqual(['stream']);
+  });
+
+  it('keeps the blob when there is no stream to replace it', () => {
+    // "This page has media I cannot resolve" is honest and useful; silence is not.
+    const kept = withoutRedundantBlobs([blob()]);
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.status).toBe('unsupported');
+  });
+
+  it('keeps a DRM refusal visible even when a stream is listed', () => {
+    // "This is protected" is information the user needs, not noise (§6.3).
+    const encrypted = blob({
+      unsupportedReason: 'Encrypted (DRM/EME) media is not supported.',
+    });
+
+    const kept = withoutRedundantBlobs([encrypted, stream()]);
+
+    expect(kept.some((entry) => entry.unsupportedReason?.includes('Encrypted') === true)).toBe(
+      true,
+    );
+  });
+
+  it('leaves a page of ordinary media completely alone', () => {
+    const items = [
+      item({ url: 'https://cdn.test/a.mp4' }),
+      item({ url: 'https://cdn.test/b.mp4' }),
+    ];
+
+    expect(withoutRedundantBlobs(items)).toStrictEqual(items);
   });
 });

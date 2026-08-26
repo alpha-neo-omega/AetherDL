@@ -24,15 +24,15 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.6.0 — media is found by its bytes, and inside iframes, 2026-08-27.** Built on the 1.0.0
+**1.7.0 — one card per video, 2026-08-27.** Built on the 1.0.0
 stable release: per-tab media detection, downloads through the browser's own download manager
 with a durable queue, retry and pause/resume, settings, local history, popup and settings
 surfaces, and the optional context-menu and notification integrations. Then 1.1.0 added stream
 downloading, 1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the extension a real
 icon, 1.3.0 joined split-track fragmented-MP4 streams, 1.4.0 added a stream quality picker and
 joined split-track MPEG-TS streams, 1.5.0 finds media that hides behind false file names and
-rides out a host that rate-limits the download, and 1.6.0 looks inside iframes, where most
-embedded players actually live.
+rides out a host that rate-limits the download, 1.6.0 looks inside iframes, where most
+embedded players actually live, and 1.7.0 offers one card per video instead of three.
 
 1.1.0 added, at the Project Owner's direction:
 
