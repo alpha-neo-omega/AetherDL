@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] — A stream stays found
+
+### Fixed
+
+- **A stream already identified is no longer lost when the page stops reporting it.** Resource
+  Timing is a fixed-size buffer, not a record: a 34-minute video fetches hundreds of segments, and
+  the playlist entry that started it is evicted long before the user looks again. Some players clear
+  the buffer outright. Re-reading the timeline then described a page with no playlist in it, and a
+  stream that had been detected — and downloaded — silently became an unfetchable `blob:` card on
+  the next look, most visibly after switching tabs and back.
+
+  What was identified for a page is now **remembered** for as long as the user is on it, fed into
+  every pass including the first, and cleared the moment the tab navigates — because then it really
+  is gone. This also stops the stream card blinking out and back each time the popup opens, since
+  the first pass no longer has to wait for the probe to re-establish what was already known.
+- **The content script keeps what the browser evicts.** Timeline entries it has already seen are
+  accumulated rather than re-read, bounded, and the bound drops the oldest **non**-manifest entry
+  first — a playlist is the one thing on that list worth keeping.
+
+### Verification
+
+`npm run ci` exits 0 — 1291 unit tests (+1 skipped), 69 performance assertions, both builds,
+manifest validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases. The
+regression test was **confirmed red** against the previous release's runtime.
+
 ## [1.8.1] — A stream that could not be read is not a stream that is not there
 
 ### Fixed

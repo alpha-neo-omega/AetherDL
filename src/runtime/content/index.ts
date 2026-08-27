@@ -11,6 +11,7 @@
  */
 import { MAX_FRAME_ORIGINS, MAX_OBSERVED_RESOURCES } from '@shared/constants';
 import type { WireObservedResource } from '@shared/types';
+import { manifestTypeFromUrl } from '@shared/utils';
 import { resolveWebExtApi } from '@platform/browser/webext';
 import { createMessageBus } from '@platform/messaging/service';
 import { createContentObserver } from '@runtime/content/observer';
@@ -43,18 +44,49 @@ const MEDIA_EVENTS = ['loadedmetadata', 'loadeddata', 'emptied', 'durationchange
  * Read from the page's own timeline — no request is made here, and nothing is
  * intercepted. Whether any of these URLs is media is decided later, from their bytes.
  */
+/**
+ * What has been seen on this page's timeline, kept because the timeline does not keep
+ * it.
+ *
+ * Resource Timing is a fixed-size buffer, and a stream fetches hundreds of segments:
+ * the playlist entry that started a 34-minute video is evicted long before the user
+ * looks again, and a page that plainly HAS a stream then reports one with no playlist
+ * in it. Pages also clear the buffer themselves. What was observed while this script
+ * was alive is therefore accumulated here rather than re-read each time.
+ *
+ * Bounded, and the bound protects the useful entries: when it is reached, the oldest
+ * entry that does NOT name a manifest is dropped first, because a playlist is the one
+ * thing on this list worth keeping.
+ */
+const seenResources = new Map<string, WireObservedResource>();
+
+function remember(resource: WireObservedResource): void {
+  if (seenResources.has(resource.url)) {
+    return;
+  }
+  if (seenResources.size >= MAX_OBSERVED_RESOURCES) {
+    for (const url of seenResources.keys()) {
+      if (manifestTypeFromUrl(url) === undefined) {
+        seenResources.delete(url);
+        break;
+      }
+    }
+    if (seenResources.size >= MAX_OBSERVED_RESOURCES) {
+      // Every remembered entry names a manifest. Keeping them beats replacing one.
+      return;
+    }
+  }
+  seenResources.set(resource.url, resource);
+}
+
 function observedResources(): readonly WireObservedResource[] {
-  const out: WireObservedResource[] = [];
   let entries: readonly PerformanceEntry[] = [];
   try {
     entries = performance.getEntriesByType('resource');
   } catch {
-    return out;
+    return [...seenResources.values()];
   }
   for (const entry of entries) {
-    if (out.length >= MAX_OBSERVED_RESOURCES) {
-      break;
-    }
     const resource = entry as PerformanceResourceTiming;
     const initiator = (resource.initiatorType ?? '').toLowerCase();
     if (!INTERESTING_INITIATORS.has(initiator)) {
@@ -65,13 +97,13 @@ function observedResources(): readonly WireObservedResource[] {
       continue;
     }
     const size = resource.transferSize || resource.encodedBodySize || 0;
-    out.push({
+    remember({
       url,
       ...(initiator !== '' && { initiatorType: initiator }),
       ...(size > 0 && { sizeBytes: size }),
     });
   }
-  return out;
+  return [...seenResources.values()];
 }
 
 /**

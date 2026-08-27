@@ -8,9 +8,10 @@
  * Restrictions: Runtime layer. Pure in-memory; clock injected for determinism. No
  *          browser globals.
  * Public API: TabDetectionStatus, TabRuntimeState, RuntimeHealth, RuntimeState,
- *          MAX_TRACKED_TABS, createRuntimeState.
+ *          MAX_TRACKED_TABS, MAX_REMEMBERED_RESOURCES, createRuntimeState.
  */
 import type { DetectionReport, MediaItem } from '@shared/types';
+import type { NetworkResource } from '@core/detection/pipeline';
 
 export type TabDetectionStatus = 'idle' | 'running' | 'detected' | 'failed';
 
@@ -56,6 +57,19 @@ interface MutableTab {
    * erase what another frame observed (§8.10, ADR-012).
    */
   reportsByFrame: Map<string, DetectionReport>;
+  /**
+   * Media resources IDENTIFIED for this page, kept until it navigates.
+   *
+   * A page's Resource Timing buffer is a cache, not a record: a 34-minute stream
+   * fetches hundreds of segments, and the playlist entry that started it is evicted
+   * long before the user opens the popup again. Re-reading the timeline then reports
+   * a page with no playlist in it, and a stream that WAS offered — and downloaded —
+   * silently became an unfetchable `blob:` card on the next look.
+   *
+   * What was identified is therefore remembered here rather than re-derived. It is
+   * scoped to the page: navigation clears it, because then it really is gone (§4.1).
+   */
+  resources: Map<string, NetworkResource>;
   lastReport: DetectionReport | undefined;
   lastItems: readonly MediaItem[];
   updatedAt: number;
@@ -84,6 +98,13 @@ export interface RuntimeState {
   getReport(tabId: number): DetectionReport | undefined;
   /** The individual frame reports, newest last. */
   getFrameReports(tabId: number): readonly DetectionReport[];
+  /**
+   * Keep media resources identified for this page, so a later pass that cannot see
+   * them any more still detects them. Bounded; cleared when the tab navigates.
+   */
+  rememberResources(tabId: number, resources: readonly NetworkResource[]): void;
+  /** What has been identified for this page so far. */
+  getResources(tabId: number): readonly NetworkResource[];
   /** Drop a tab's detection results + stored observations (status → 'idle'). */
   clearDetection(tabId: number): void;
   setActiveTab(tabId: number | undefined): void;
@@ -111,6 +132,14 @@ export interface RuntimeState {
  * The number matches the detection cache's own tab bound so the two agree.
  */
 export const MAX_TRACKED_TABS = 50;
+
+/**
+ * Identified media resources remembered per page.
+ *
+ * A page offers a handful of streams, not dozens; this is a bound on a memory that
+ * outlives the timeline it came from, not a working set (§10.9, §12.1).
+ */
+export const MAX_REMEMBERED_RESOURCES = 32;
 
 export interface RuntimeStateDeps {
   readonly clock: () => number;
@@ -231,6 +260,7 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
         itemCount: 0,
         connected: false,
         reportsByFrame: new Map<string, DetectionReport>(),
+        resources: new Map<string, NetworkResource>(),
         lastReport: undefined,
         lastItems: [],
         updatedAt: clock(),
@@ -321,10 +351,29 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
       const tab = ensure(tabId);
       tab.lastItems = [];
       tab.reportsByFrame.clear();
+      tab.resources.clear();
       tab.lastReport = undefined;
       tab.itemCount = 0;
       tab.status = 'idle';
       tab.updatedAt = clock();
+    },
+
+    rememberResources(tabId: number, resources: readonly NetworkResource[]): void {
+      const tab = ensure(tabId);
+      for (const resource of resources) {
+        if (tab.resources.size >= MAX_REMEMBERED_RESOURCES && !tab.resources.has(resource.url)) {
+          const oldest = tab.resources.keys().next().value;
+          if (oldest !== undefined) {
+            tab.resources.delete(oldest);
+          }
+        }
+        tab.resources.set(resource.url, resource);
+      }
+      tab.updatedAt = clock();
+    },
+
+    getResources(tabId: number): readonly NetworkResource[] {
+      return [...(tabs.get(tabId)?.resources.values() ?? [])];
     },
 
     setActiveTab(tabId: number | undefined): void {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectionReport } from '@shared/types';
-import { createRuntimeState } from '@runtime/background/state';
+import { MAX_REMEMBERED_RESOURCES, createRuntimeState } from '@runtime/background/state';
 import { mediaItem, report } from '../_fixtures';
 
 function makeState(): ReturnType<typeof createRuntimeState> {
@@ -244,6 +244,32 @@ describe('runtime state — one report per frame (§8.10)', () => {
       'https://cdn.test/a.txt',
       'https://cdn.test/b.txt',
     ]);
+  });
+
+  it('remembers identified resources per page, bounded, and forgets them on clear', () => {
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+
+    state.rememberResources(1, [{ url: 'https://cdn.test/a.m3u8' }]);
+    state.rememberResources(1, [{ url: 'https://cdn.test/b.m3u8' }]);
+    // Re-identifying the same URL updates it rather than listing it twice.
+    state.rememberResources(1, [{ url: 'https://cdn.test/a.m3u8', mimeType: 'video/mp4' }]);
+    expect(state.getResources(1).map((resource) => resource.url)).toStrictEqual([
+      'https://cdn.test/a.m3u8',
+      'https://cdn.test/b.m3u8',
+    ]);
+
+    state.rememberResources(
+      1,
+      Array.from({ length: MAX_REMEMBERED_RESOURCES + 4 }, (_, index) => ({
+        url: `https://cdn.test/extra-${String(index)}.m3u8`,
+      })),
+    );
+    expect(state.getResources(1)).toHaveLength(MAX_REMEMBERED_RESOURCES);
+
+    state.clearDetection(1);
+    expect(state.getResources(1)).toStrictEqual([]);
+    expect(state.getResources(99)).toStrictEqual([]);
   });
 
   it('carries the frame count and embedded origins through the merge', () => {

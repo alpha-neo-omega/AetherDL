@@ -156,7 +156,13 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
     state.beginOperation(tabId);
     const token = bumpToken(tabId);
     try {
-      const context = buildDetectionContext(report, tabId, source, clock());
+      // What was identified for this page earlier is part of what the page HAS, even
+      // when the timeline it was read from has since evicted it (§4.1). Supplying it
+      // to the first pass is also what keeps a stream card from blinking out and back
+      // every time the popup is opened.
+      const known = state.getResources(tabId);
+      const base = buildDetectionContext(report, tabId, source, clock());
+      const context = known.length > 0 ? { ...base, networkResources: known } : base;
       const items = await engine.detect(context);
       // A newer run or an invalidation (navigation/clear) superseded this one while
       // detectors ran — drop the stale result rather than clobber current state.
@@ -214,10 +220,12 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
       return;
     }
     try {
-      const networkResources = await probe.identify(observed);
-      if (networkResources.length === 0 || runTokens.get(tabId) !== token) {
+      const found = await probe.identify(observed);
+      if (found.length === 0 || runTokens.get(tabId) !== token) {
         return;
       }
+      state.rememberResources(tabId, found);
+      const networkResources = state.getResources(tabId);
       // The cache is keyed per tab and would answer with the first pass's result; the
       // enriched context is a different question (§9.9).
       engine.invalidate(tabId);

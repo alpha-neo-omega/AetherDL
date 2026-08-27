@@ -440,6 +440,52 @@ describe('background detection runtime — identifying what the page fetched (AD
     return h.client.send('detection/run', fetchedReport());
   };
 
+  it('keeps a stream it identified once the page stops reporting the playlist', async () => {
+    // Exactly what a user sees on a long video: the stream is detected and downloaded,
+    // then the page's Resource Timing buffer fills with segment requests and evicts the
+    // playlist entry. The next look reported a page with no playlist in it, and a
+    // working stream card silently became an unfetchable blob: card.
+    const identified: NetworkResource[] = [
+      { url: PLAYLIST, mimeType: 'application/vnd.apple.mpegurl' },
+    ];
+    const h = setupWithProbe(fakeProbe(identified).probe);
+    h.engine.setItems([mediaItem({ id: 'stream' })]);
+
+    await send(h);
+    await flush();
+
+    // The page reports again, and this time the timeline no longer holds the playlist.
+    await h.client.send('detection/run', report({ pageUrl: PAGE, observedResources: [] }));
+    await flush();
+
+    const last = h.engine.contexts.at(-1);
+    expect(last?.networkResources?.map((resource) => resource.url)).toStrictEqual([PLAYLIST]);
+  });
+
+  it('forgets an identified stream once the tab navigates', async () => {
+    // Remembering it beyond the page it belongs to would attribute media to a page that
+    // never had it (§4.1).
+    const identified: NetworkResource[] = [
+      { url: PLAYLIST, mimeType: 'application/vnd.apple.mpegurl' },
+    ];
+    const h = setupWithProbe(fakeProbe(identified).probe);
+    h.engine.setItems([mediaItem({ id: 'stream' })]);
+
+    await send(h);
+    await flush();
+    h.fake.onUpdated.trigger(
+      7,
+      {},
+      { id: 7, url: 'https://site.test/other', active: true, windowId: 1 },
+    );
+    h.fake.setTabs([{ id: 7, active: true, url: 'https://site.test/other', windowId: 1 }]);
+    await h.client.send('detection/run', report({ pageUrl: 'https://site.test/other' }));
+    await flush();
+
+    const last = h.engine.contexts.at(-1);
+    expect(last?.networkResources ?? []).toStrictEqual([]);
+  });
+
   it('commits the DOM result BEFORE any request is made', async () => {
     // Detection latency is a budget (§12.1). A page whose media is only discoverable
     // by probing must not delay the result for a page whose media is in the DOM, so
