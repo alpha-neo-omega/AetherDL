@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.3] — The playlist is at the front of the queue
+
+### Fixed
+
+- **A stream detected on 1.8.1 stopped being detected on 1.8.2.** The bound 1.8.2 put on accumulated
+  timeline entries evicted the **oldest** entry to make room for each new one. A player fetches its
+  playlist first and its segments afterwards, so on a page with more segments than the cap allows
+  that policy converged on the last 200 requests — every one of them a segment — and discarded the
+  playlist on the first pass, identically on every pass after it. The stream was never probed and
+  never offered again; only the unfetchable `blob:` card remained. Reproduced in a simulation
+  against a frozen 245-entry timeline before anything was changed.
+
+  The cap now preserves the **head**, which is where a playlist is. A manifest remains the exception
+  in both directions — never evicted, and admitted even when the list is full, because a playlist
+  discovered late is the one thing worth making room for. This is at least as good as 1.8.1 on every
+  path: identical window when the timeline is intact, and strictly better when a page clears its own
+  timeline or fetches a playlist late.
+- **Re-injecting the content script into a page it is already running on now makes it report
+  again.** The background's state is in-memory, so a suspended service worker comes back knowing
+  nothing about the tab and re-injects to find out — and the guard that stops a second observer
+  stacking made that a no-op. Until the DOM next changed, which a video that is simply playing need
+  not do, the popup showed a page with nothing on it. The running instance is now asked to report
+  instead. This is the other half of what looked like "the card disappears after switching tabs".
+- **The Resource Timing observer's own entries are harvested.** A `PerformanceObserver` is delivered
+  entries the buffer refuses to record once it is full, which is the only sight the extension gets
+  of a playlist fetched late on a page that has already made hundreds of requests.
+
+### Changed
+
+- The bounding logic moved out of the content entry into `src/runtime/content/timeline.ts` and is
+  now unit-tested. It shipped broken because it lived in a module excluded from coverage, deciding
+  whether a stream is findable at all; three of the new tests fail against the 1.8.2 policy.
+
+### Verification
+
+`npm run ci` exits 0 — 1301 unit tests (+1 skipped), 69 performance assertions, both builds,
+manifest validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases. Both
+fixes were confirmed red against the code they replace.
+
 ## [1.8.2] — A stream stays found
 
 ### Fixed
@@ -24,9 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every pass including the first, and cleared the moment the tab navigates — because then it really
   is gone. This also stops the stream card blinking out and back each time the popup opens, since
   the first pass no longer has to wait for the probe to re-establish what was already known.
-- **The content script keeps what the browser evicts.** Timeline entries it has already seen are
-  accumulated rather than re-read, bounded, and the bound drops the oldest **non**-manifest entry
-  first — a playlist is the one thing on that list worth keeping.
+- **The content script accumulates timeline entries rather than re-reading them**, bounded.
+
+  > **Correction (1.8.3).** The rationale published here was wrong on the facts, and the bound it
+  > justified caused a regression. Resource Timing does **not** evict old entries when it fills: per
+  > spec it stops recording and drops NEW entries, keeping what it already holds. Accumulation is
+  > still worth having — a page that calls `performance.clearResourceTimings()` would otherwise
+  > un-detect a stream already found — but "drops the oldest entry" was exactly backwards. See
+  > 1.8.3.
 
 ### Verification
 

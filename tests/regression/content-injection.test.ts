@@ -6,9 +6,10 @@
  * change. Fixed by marking the isolated world on first run (§12.4, §12.8).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createFakeWebExt } from '../unit/platform/_fake-webext';
+import { createFakeWebExt, type FakeWebExt } from '../unit/platform/_fake-webext';
 
 let observers = 0;
+let fake: FakeWebExt;
 
 class CountingMutationObserver {
   constructor(private readonly callback: () => void) {}
@@ -40,7 +41,8 @@ function newPage(): void {
 beforeEach(() => {
   observers = 0;
   newPage();
-  (globalThis as { chrome?: unknown }).chrome = createFakeWebExt().api;
+  fake = createFakeWebExt();
+  (globalThis as { chrome?: unknown }).chrome = fake.api;
   vi.stubGlobal('MutationObserver', CountingMutationObserver);
 });
 
@@ -56,6 +58,28 @@ describe('regression: repeated injection stacked observers (Phase 9)', () => {
     await inject();
     await inject();
 
+    expect(observers).toBe(1);
+  });
+
+  it('reports again when it is injected into a page it is already running on', async () => {
+    // The background's state is in-memory: a suspended service worker comes back
+    // knowing nothing about the tab, and re-injects to find out. Making that a no-op
+    // left the popup showing a page with nothing on it until the DOM next changed —
+    // which a video that is simply playing need not do (§8.10).
+    const reports: unknown[] = [];
+    fake.api.runtime.onMessage.addListener((message: unknown) => {
+      reports.push(message);
+      return undefined;
+    });
+
+    await inject();
+    await Promise.resolve();
+    const before = reports.length;
+
+    await inject();
+    await Promise.resolve();
+
+    expect(reports.length).toBeGreaterThan(before);
     expect(observers).toBe(1);
   });
 

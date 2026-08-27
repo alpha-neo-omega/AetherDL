@@ -9,12 +9,16 @@
  *          detached on unload (§12.8). Coverage-excluded (touches DOM globals); the
  *          observable logic lives in ./observer and ./scan and is unit-tested.
  */
-import { MAX_FRAME_ORIGINS, MAX_OBSERVED_RESOURCES } from '@shared/constants';
+import { MAX_FRAME_ORIGINS } from '@shared/constants';
 import type { WireObservedResource } from '@shared/types';
-import { manifestTypeFromUrl } from '@shared/utils';
 import { resolveWebExtApi } from '@platform/browser/webext';
 import { createMessageBus } from '@platform/messaging/service';
 import { createContentObserver } from '@runtime/content/observer';
+import {
+  createResourceTimeline,
+  isInterestingInitiator,
+  type TimelineEntry,
+} from '@runtime/content/timeline';
 import type { DocumentLike } from '@runtime/content/scan';
 
 const SCAN_DEBOUNCE_MS = 200;
@@ -29,13 +33,18 @@ const SCAN_DEBOUNCE_MS = 200;
 const ALREADY_INJECTED = '__aetherdlContentScript';
 
 /**
- * Resource Timing initiators that can carry a stream a player fetched itself.
+ * A way back in for an injection that finds the script already running.
  *
- * A page loads hundreds of resources; only the script-driven ones can be the playlist
- * a MediaSource is being fed from. Reporting the rest would fill the message with
- * images and fonts (§9.1, ADR-012).
+ * The background re-injects on every gesture-backed refresh, and its own state is
+ * in-memory: a suspended service worker comes back knowing nothing about the tab. The
+ * marker above then made the re-injection a no-op, so the only thing that could restore
+ * what the page holds was the next DOM mutation — and a video that is simply playing
+ * may not produce one. The popup showed a page with nothing on it.
+ *
+ * So the already-running instance is asked to report again instead (§8.10).
  */
-const INTERESTING_INITIATORS = new Set(['xmlhttprequest', 'fetch', 'video', 'audio', 'other', '']);
+const RESCAN = '__aetherdlContentRescan';
+
 const MEDIA_EVENTS = ['loadedmetadata', 'loadeddata', 'emptied', 'durationchange'] as const;
 
 /**
@@ -44,68 +53,6 @@ const MEDIA_EVENTS = ['loadedmetadata', 'loadeddata', 'emptied', 'durationchange
  * Read from the page's own timeline — no request is made here, and nothing is
  * intercepted. Whether any of these URLs is media is decided later, from their bytes.
  */
-/**
- * What has been seen on this page's timeline, kept because the timeline does not keep
- * it.
- *
- * Resource Timing is a fixed-size buffer, and a stream fetches hundreds of segments:
- * the playlist entry that started a 34-minute video is evicted long before the user
- * looks again, and a page that plainly HAS a stream then reports one with no playlist
- * in it. Pages also clear the buffer themselves. What was observed while this script
- * was alive is therefore accumulated here rather than re-read each time.
- *
- * Bounded, and the bound protects the useful entries: when it is reached, the oldest
- * entry that does NOT name a manifest is dropped first, because a playlist is the one
- * thing on this list worth keeping.
- */
-const seenResources = new Map<string, WireObservedResource>();
-
-function remember(resource: WireObservedResource): void {
-  if (seenResources.has(resource.url)) {
-    return;
-  }
-  if (seenResources.size >= MAX_OBSERVED_RESOURCES) {
-    for (const url of seenResources.keys()) {
-      if (manifestTypeFromUrl(url) === undefined) {
-        seenResources.delete(url);
-        break;
-      }
-    }
-    if (seenResources.size >= MAX_OBSERVED_RESOURCES) {
-      // Every remembered entry names a manifest. Keeping them beats replacing one.
-      return;
-    }
-  }
-  seenResources.set(resource.url, resource);
-}
-
-function observedResources(): readonly WireObservedResource[] {
-  let entries: readonly PerformanceEntry[] = [];
-  try {
-    entries = performance.getEntriesByType('resource');
-  } catch {
-    return [...seenResources.values()];
-  }
-  for (const entry of entries) {
-    const resource = entry as PerformanceResourceTiming;
-    const initiator = (resource.initiatorType ?? '').toLowerCase();
-    if (!INTERESTING_INITIATORS.has(initiator)) {
-      continue;
-    }
-    const url = resource.name;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      continue;
-    }
-    const size = resource.transferSize || resource.encodedBodySize || 0;
-    remember({
-      url,
-      ...(initiator !== '' && { initiatorType: initiator }),
-      ...(size > 0 && { sizeBytes: size }),
-    });
-  }
-  return [...seenResources.values()];
-}
-
 /**
  * The distinct cross-origin origins this document embeds players from.
  *
@@ -150,9 +97,34 @@ function frameOrigins(): readonly string[] {
   return [...out];
 }
 
+/**
+ * What the page has fetched, as plain data.
+ *
+ * Read from the page's own timeline — no request is made here, and nothing is
+ * intercepted. Whether any of these URLs is media is decided later, from their bytes.
+ * The bounding and accumulation live in `./timeline`, where they can be tested.
+ */
+const timeline = createResourceTimeline();
+
+function observedResources(): readonly WireObservedResource[] {
+  try {
+    return timeline.harvest(
+      performance.getEntriesByType('resource') as unknown as readonly TimelineEntry[],
+    );
+  } catch {
+    // No timeline to read is not the same as nothing observed: what was seen earlier
+    // still stands.
+    return timeline.harvest([]);
+  }
+}
+
 function start(): void {
   const world = globalThis as Record<string, unknown>;
   if (world[ALREADY_INJECTED] === true) {
+    const rescan = world[RESCAN];
+    if (typeof rescan === 'function') {
+      (rescan as () => void)();
+    }
     return;
   }
   world[ALREADY_INJECTED] = true;
@@ -198,9 +170,14 @@ function start(): void {
   let resourceObserver: PerformanceObserver | undefined;
   try {
     resourceObserver = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const initiator = ((entry as PerformanceResourceTiming).initiatorType ?? '').toLowerCase();
-        if (INTERESTING_INITIATORS.has(initiator)) {
+      // Harvested here as well as on each scan: an observer is delivered entries the
+      // BUFFER never records, because Resource Timing stops recording once it is full.
+      // This is the only sight the extension gets of a playlist fetched late on a page
+      // that has already made a few hundred requests.
+      const entries = list.getEntries() as unknown as readonly TimelineEntry[];
+      timeline.harvest(entries);
+      for (const entry of entries) {
+        if (isInterestingInitiator(entry.initiatorType)) {
           observer.notify();
           return;
         }
@@ -214,8 +191,13 @@ function start(): void {
     document.addEventListener(type, onMediaEvent, true);
   }
 
+  world[RESCAN] = (): void => {
+    observer.flush();
+  };
+
   const teardown = (): void => {
     world[ALREADY_INJECTED] = false;
+    delete world[RESCAN];
     observer.dispose();
     mutationObserver.disconnect();
     resourceObserver?.disconnect();
