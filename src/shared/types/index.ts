@@ -254,6 +254,16 @@ export interface DetectionReport {
    * which have none — measurably starved the rest of the runtime (§7.2, §12.1).
    */
   readonly frameCount?: number;
+  /**
+   * The distinct cross-origin origins this document embeds in frames.
+   *
+   * A top document can see that it embeds `https://player.example/e/abc`; it cannot
+   * see inside it, and neither can the extension, because `activeTab` covers the
+   * tab's own origin and stops at a frame belonging to someone else (§13.7). Naming
+   * those origins is what lets a surface ask the user whether to opt that one site
+   * in — the only way the player's own requests ever become observable (§8.10).
+   */
+  readonly frameOrigins?: readonly string[];
 }
 
 /**
@@ -410,6 +420,12 @@ export interface MessageMap {
   readonly 'detection/refresh': MessageExchange<{ readonly tabId: number }, readonly MediaItem[]>;
   /** Drop a tab's cached detection results and stored observations. */
   readonly 'detection/clear': MessageExchange<{ readonly tabId: number }, void>;
+  /**
+   * The cross-origin origins this tab embeds players from, so a surface can offer to
+   * opt one in (§13.7). Reporting an origin grants nothing: the answer is a list of
+   * names for the user to decide about.
+   */
+  readonly 'detection/embeds': MessageExchange<{ readonly tabId: number }, readonly string[]>;
   /** Enqueue detected media by identity key; the background resolves the items. */
   readonly 'download/enqueue': MessageExchange<
     {

@@ -198,10 +198,13 @@ content-script injection at install — and **no site access at all**. On Chromi
 `offscreen`, which grants access to nothing: it lets AetherDL open its own hidden page to assemble a
 stream, because a Chromium service worker cannot do that itself.
 
-Site access is asked for **when you click download on a stream**, for that stream's hosts only. Every
-granted site is listed in AetherDL's own Settings page, where each can be revoked. Declining cancels that download and nothing else. Notifications and
-context-menu entries are optional and are requested only if you turn those features on.
-(PROJECT_BIBLE.md §13.3, §13.7)
+Site access is asked for in two moments, and only ever for named origins. **When you click download
+on a stream**, for that stream's hosts. And **when this page's player is embedded from another
+site** — AetherDL can see that the frame exists and nothing inside it, so it names that site and
+asks, rather than reporting that the page has no media. Every granted site is listed in AetherDL's
+own Settings page, where each can be revoked. Declining cancels that one action and nothing else.
+Notifications and context-menu entries are optional and are requested only if you turn those
+features on. (PROJECT_BIBLE.md §13.3, §13.7)
 
 **Browsers**
 

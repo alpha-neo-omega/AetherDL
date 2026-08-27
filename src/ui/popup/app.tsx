@@ -189,6 +189,17 @@ function PopupSurface(props: {
     [t],
   );
 
+  /**
+   * The site an embedded player is served from, named for the prompt.
+   *
+   * The host without its scheme is what a person recognises, and more than one frame
+   * origin is rare enough not to deserve a second sentence: they are joined.
+   */
+  const embedOrigin = runtime.embeddedOrigins
+    .map((origin) => origin.replace(/^https?:\/\//i, ''))
+    .join(', ');
+  const embedPrompt = runtime.embeddedOrigins.length > 0 ? embedOrigin : undefined;
+
   const selectableIds = visible
     .filter((item: MediaItem) => item.status === 'supported')
     .map((item) => item.id);
@@ -220,8 +231,21 @@ function PopupSurface(props: {
       );
     }
     if (items.length === 0) {
-      return (
+      // "Nothing here" and "not allowed to look" are different facts, and only one of
+      // them is the user's to fix. When the page's player sits in someone else's
+      // frame, say so and offer the grant instead of reporting an empty page (§2.8).
+      return embedPrompt === undefined ? (
         <StatusView kind="empty" title={t('popup.empty.title')} detail={t('popup.empty.detail')} />
+      ) : (
+        <StatusView
+          kind="empty"
+          title={t('popup.embed.title')}
+          detail={`${t('popup.embed.detail', { origin: embedPrompt })} ${t('popup.embed.hint')}`}
+          action={{
+            label: t('popup.embed.action', { origin: embedPrompt }),
+            onClick: actions.allowEmbeddedAccess,
+          }}
+        />
       );
     }
     if (visible.length === 0) {
@@ -336,6 +360,20 @@ function PopupSurface(props: {
           </div>
           <Button variant="text" onClick={actions.dismissNotice}>
             {t('error.dismiss')}
+          </Button>
+        </div>
+      )}
+
+      {embedPrompt !== undefined && items.length > 0 && (
+        <div className="adl-notice" role="status">
+          <div className="adl-notice__text">
+            <p className="adl-notice__title">{t('popup.embed.title')}</p>
+            <p className="adl-notice__detail">
+              {`${t('popup.embed.detail', { origin: embedPrompt })} ${t('popup.embed.hint')}`}
+            </p>
+          </div>
+          <Button variant="tonal" onClick={actions.allowEmbeddedAccess}>
+            {t('popup.embed.action', { origin: embedPrompt })}
           </Button>
         </div>
       )}

@@ -23,6 +23,7 @@ import type { DetectionContext } from '@core/detection/pipeline';
 import type { ResourceProbe } from '@core/detection/probe';
 import {
   buildDetectionContext,
+  frameOriginsFrom,
   isDetectionReport,
   observedResourcesFrom,
 } from '@runtime/background/context';
@@ -367,6 +368,12 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
         // report to re-run, and this is the gesture-backed moment the extension is
         // allowed to touch the page (§8.10, §13.7). Fresh observations arrive as
         // their own `detection/run` and are broadcast to open surfaces (§8.5).
+        //
+        // Frames are re-entered on a refresh even if this page's frames were already
+        // tried: the usual reason a surface refreshes is that something CHANGED about
+        // what may be entered — the user just opted a site in — and the once-per-page
+        // guard exists to keep automatic passes cheap, not to outlast a new grant.
+        framesObserved.delete(tabId);
         await injectObserver(tabId);
         const report = state.getReport(tabId);
         if (report === undefined) {
@@ -379,6 +386,16 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
       bus.on('detection/query', (request) => {
         const tabId = extractTabId(request);
         return tabId === undefined ? [] : state.getItems(tabId);
+      }),
+      // The origins this tab embeds players from, for a surface to offer (§13.7).
+      // Answering names an origin; it grants nothing and requests nothing.
+      bus.on('detection/embeds', (request) => {
+        const tabId = extractTabId(request);
+        if (tabId === undefined) {
+          return [];
+        }
+        const report = state.getReport(tabId);
+        return report === undefined ? [] : frameOriginsFrom(report);
       }),
       // Drop a tab's cached results + stored observations.
       bus.on('detection/clear', (request) => {

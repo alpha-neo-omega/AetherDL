@@ -150,8 +150,14 @@ function mergedReport(tab: MutableTab | undefined): DetectionReport | undefined 
   const urls = new Set<string>();
   const resources = new Map<string, NonNullable<DetectionReport['observedResources']>[number]>();
   const signals: DetectionReport['domSignals'][number][] = [];
+  const origins = new Set<string>();
+  let frames = 0;
   for (const report of reports) {
     signals.push(...report.domSignals);
+    frames += report.frameCount ?? 0;
+    for (const origin of report.frameOrigins ?? []) {
+      origins.add(origin);
+    }
     for (const url of report.observedUrls) {
       urls.add(url);
     }
@@ -167,6 +173,11 @@ function mergedReport(tab: MutableTab | undefined): DetectionReport | undefined 
     domSignals: signals,
     observedUrls: [...urls],
     ...(resources.size > 0 && { observedResources: [...resources.values()] }),
+    // Carried through the merge, not dropped by it: a refresh runs from the merged
+    // report, and a page whose frame count vanished on the way would never have its
+    // frames re-entered — which is exactly the moment a fresh grant needs them to be.
+    ...(frames > 0 && { frameCount: frames }),
+    ...(origins.size > 0 && { frameOrigins: [...origins] }),
   };
 }
 

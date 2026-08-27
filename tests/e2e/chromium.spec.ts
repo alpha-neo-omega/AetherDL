@@ -422,6 +422,56 @@ test.describe('AetherDL sees a player that lives in an iframe', () => {
     await site.close();
   });
 
+  test('names the other site a player is embedded from, without asking for it', async () => {
+    // The case that reaches the user as "No media detected": the player is not merely
+    // in a frame, it is in a frame belonging to SOMEONE ELSE. `activeTab` stops at that
+    // boundary, so the extension can see the frame exists and nothing inside it. What
+    // it can do is name the origin, so the user can decide (§13.7).
+    const crossOrigin = site.origin.replace('127.0.0.1', 'localhost');
+    const page = await extension.context.newPage();
+    await stubMessaging(page);
+    await page.goto(`${site.origin}/embedded.html?src=${crossOrigin}/disguised.html`);
+    await page.addScriptTag({ path: join(distDir('chrome'), 'content.js') });
+
+    const report = await until(
+      'the top frame to report the origin it embeds',
+      () =>
+        page
+          .evaluate(() => (globalThis as ReportWindow).__adlReports ?? [])
+          .catch(() => [] as DetectionReport[]),
+      (reports) => reports.some((entry) => (entry.frameOrigins ?? []).length > 0),
+      15_000,
+    );
+
+    const origins = report.flatMap((entry) => entry.frameOrigins ?? []);
+    expect(origins).toContain(crossOrigin);
+    // Read from the frame's `src` attribute — the one thing about a cross-origin frame
+    // a page may see. Nothing was entered and nothing was fetched to learn it.
+    expect(origins).not.toContain(site.origin);
+
+    const popup = await extension.page('popup.html');
+    await popup.bringToFront();
+    await sendMessage<readonly MediaItem[]>(popup, {
+      type: 'detection/run',
+      payload: report.find((entry) => (entry.frameOrigins ?? []).length > 0),
+    });
+    const tabId = await extension.worker.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tab?.id ?? -1;
+    });
+    const offered = await sendMessage<readonly string[]>(popup, {
+      type: 'detection/embeds',
+      payload: { tabId },
+    });
+    expect(offered).toContain(crossOrigin);
+
+    // Naming an origin is not taking it: nothing was granted by asking the question.
+    const granted = await extension.worker.evaluate(() => chrome.permissions.getAll());
+    expect(granted.origins ?? []).not.toContain(`${crossOrigin}/*`);
+    await popup.close();
+    await page.close();
+  });
+
   test('the top frame holds nothing, and the frame holds everything', async () => {
     // Exactly the shape that made a real site undetectable: the watch page has no
     // <video> at all, and the player — with its blob: URL and its disguised playlist —

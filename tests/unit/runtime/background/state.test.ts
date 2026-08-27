@@ -246,6 +246,23 @@ describe('runtime state — one report per frame (§8.10)', () => {
     ]);
   });
 
+  it('carries the frame count and embedded origins through the merge', () => {
+    // A refresh runs from the MERGED report. A merge that dropped these would leave a
+    // refresh unable to re-enter the frames — the exact moment a fresh grant needs it
+    // to — and would leave the surface with no origin to offer (§8.10, §13.7).
+    const state = createRuntimeState({ clock: () => 0 });
+    state.ensureTab(1, 'https://site.test/watch');
+    state.setReport(
+      1,
+      frame('https://site.test/watch', { frameCount: 1, frameOrigins: ['https://player.test'] }),
+    );
+    state.setReport(1, frame('https://player.test/e/abc', { frameOrigins: ['https://cdn.test'] }));
+
+    const merged = state.getReport(1);
+    expect(merged?.frameCount).toBe(1);
+    expect(merged?.frameOrigins).toEqual(['https://player.test', 'https://cdn.test']);
+  });
+
   it('replaces a frame when that same frame reports again', () => {
     const state = createRuntimeState({ clock: () => 0 });
     state.ensureTab(1, 'https://site.test/watch');

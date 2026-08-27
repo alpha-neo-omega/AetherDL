@@ -362,6 +362,28 @@ export async function startFixtureSite(root: string = SITE_ROOT, port = 0): Prom
       response.end(body);
       return;
     }
+    // A watch page that embeds its player from WHEREVER the test says.
+    //
+    // The port is only known at run time, so the page cannot be a static file: a
+    // genuinely cross-origin frame is the whole point, and same-origin is what every
+    // static fixture would be.
+    if (requested === '/embedded.html') {
+      const src = new URL(request.url ?? '/', 'http://placeholder').searchParams.get('src') ?? '';
+      const body = [
+        '<!doctype html>',
+        '<html lang="en"><head><meta charset="utf-8" /><title>Watch — embedded</title></head>',
+        '<body><h1>Watch</h1>',
+        `<iframe src="${src.replace(/[<>"&]/g, '')}" width="640" height="360" title="player"></iframe>`,
+        '</body></html>',
+      ].join('\n');
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+
     // A URL that always fails, for the retry case.
     if (requested === '/media/missing.mp4') {
       response.writeHead(404).end();

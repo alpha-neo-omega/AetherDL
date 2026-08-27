@@ -125,6 +125,10 @@ export interface FakeRuntimeClient {
   setStreamAccess(granted: boolean): void;
   /** What `stream/qualities` reports for the next chooser (§10.6). */
   setStreamQualities(renditions: readonly StreamRenditionSnapshot[]): void;
+  /** Origins the page embeds a player from, and whether they are already granted. */
+  setEmbeddedOrigins(origins: readonly string[], granted?: boolean): void;
+  /** Decide what the point-of-use grant for an embedding site answers (§13.7). */
+  setSiteAccess(granted: boolean): void;
   /** Make the next call of a method reject with `error`. */
   failNext(method: string, error: unknown): void;
   /** Push a runtime download event, as the background broadcasts it. */
@@ -147,6 +151,9 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
   let settings: Settings = DEFAULT_SETTINGS;
   let streamAccess = true;
   let streamQualities: readonly StreamRenditionSnapshot[] = [];
+  let embeddedOrigins: readonly string[] = [];
+  let embeddedGranted = false;
+  let siteAccess = true;
   const settingsListeners = new Set<(next: Settings) => void>();
 
   const guard = <T>(method: string, argument: string, value: T): Promise<T> => {
@@ -176,6 +183,13 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
     },
     setStreamQualities(renditions: readonly StreamRenditionSnapshot[]): void {
       streamQualities = renditions;
+    },
+    setEmbeddedOrigins(origins: readonly string[], granted = false): void {
+      embeddedOrigins = origins;
+      embeddedGranted = granted;
+    },
+    setSiteAccess(granted: boolean): void {
+      siteAccess = granted;
     },
     failNext(method: string, error: unknown): void {
       failures.set(method, error);
@@ -221,6 +235,12 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
         ),
       requestStreamAccess: (urls: readonly string[]) =>
         guard<boolean>('requestStreamAccess', urls.join(','), streamAccess),
+      embeddedOrigins: (id: number) =>
+        guard<readonly string[]>('embeddedOrigins', String(id), embeddedOrigins),
+      hasSiteAccess: (origins: readonly string[]) =>
+        guard<boolean>('hasSiteAccess', origins.join(','), embeddedGranted),
+      requestSiteAccess: (origins: readonly string[]) =>
+        guard<boolean>('requestSiteAccess', origins.join(','), siteAccess),
       cancel: (id: string) => guard<void>('cancel', id, undefined),
       retry: (id: string) => guard<void>('retry', id, undefined),
       pause: (id: string) => guard<void>('pause', id, undefined),

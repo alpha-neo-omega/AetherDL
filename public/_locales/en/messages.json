@@ -139,6 +139,22 @@
     "message": "Play or open media on this page, then reopen AetherDL.",
     "description": "Popup: popup.empty.detail"
   },
+  "popup_embed_title": {
+    "message": "The player is on another site",
+    "description": "Popup: popup.embed.title"
+  },
+  "popup_embed_detail": {
+    "message": "This page plays its video inside {origin}. AetherDL cannot see into that site until you allow it.",
+    "description": "Popup: popup.embed.detail"
+  },
+  "popup_embed_action": {
+    "message": "Allow {origin}",
+    "description": "Popup: popup.embed.action"
+  },
+  "popup_embed_hint": {
+    "message": "You can undo this any time in Settings → Site access.",
+    "description": "Popup: popup.embed.hint"
+  },
   "popup_noMatches_title": {
     "message": "No matches",
     "description": "Popup: popup.noMatches.title"

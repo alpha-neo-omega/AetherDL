@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDetectionContext,
+  frameOriginsFrom,
   isDetectionReport,
+  MAX_ORIGINS,
   MAX_SIGNALS,
   MAX_URLS,
 } from '@runtime/background/context';
@@ -183,5 +185,53 @@ describe('detection context: relative URLs from an untrusted report (§13.8)', (
 
     expect(context.domSignals[0]?.src).toBe('/media/clip.mp4');
     expect(context.observedUrls).toEqual(['/media/clip.mp4']);
+  });
+});
+
+describe('frameOriginsFrom (§13.8, §13.7)', () => {
+  const base = { pageUrl: 'https://site.test/watch', domSignals: [], observedUrls: [] } as const;
+
+  it('keeps the distinct http(s) origins a page says it embeds', () => {
+    expect(
+      frameOriginsFrom({
+        ...base,
+        frameOrigins: ['https://player.test', 'https://player.test', 'http://old.test'],
+      }),
+    ).toEqual(['https://player.test', 'http://old.test']);
+  });
+
+  it('reduces anything with a path or a query to its bare origin', () => {
+    // What lands in the prompt is what the user is asked to trust, so it is re-derived
+    // here rather than echoed back from the page.
+    expect(
+      frameOriginsFrom({ ...base, frameOrigins: ['https://player.test/e/abc?k=1#x'] }),
+    ).toEqual(['https://player.test']);
+  });
+
+  it('drops what no host permission can be granted for', () => {
+    expect(
+      frameOriginsFrom({
+        ...base,
+        frameOrigins: [
+          'about:blank',
+          'data:text/html,<b>',
+          'javascript:void 0',
+          'file:///tmp/x.html',
+          '*://*/*',
+          '',
+          'not a url',
+        ] as readonly string[],
+      }),
+    ).toEqual([]);
+  });
+
+  it('ignores a non-array field and caps a flood of origins', () => {
+    expect(frameOriginsFrom({ ...base, frameOrigins: 'https://x.test' as never })).toEqual([]);
+    const many = Array.from({ length: MAX_ORIGINS + 5 }, (_, index) => `https://f${index}.test`);
+    expect(frameOriginsFrom({ ...base, frameOrigins: many })).toHaveLength(MAX_ORIGINS);
+  });
+
+  it('reports nothing when the page embeds nothing', () => {
+    expect(frameOriginsFrom(base)).toEqual([]);
   });
 });

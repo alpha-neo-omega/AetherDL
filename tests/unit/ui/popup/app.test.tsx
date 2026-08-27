@@ -684,6 +684,77 @@ describe('ui/popup PopupApp — host access for stream downloads (§13.7, §4.15
   });
 });
 
+describe('ui/popup PopupApp — a player embedded from another site (§13.7)', () => {
+  it('offers the grant instead of reporting an empty page', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([]);
+    fake.setEmbeddedOrigins(['https://player.test']);
+    const view = await mount(fake);
+
+    // "Nothing here" and "not allowed to look" are different facts, and saying the
+    // first when the second is true is the dishonest one (§2.8).
+    expect(view.container.textContent).toContain('The player is on another site');
+    expect(view.container.textContent).not.toContain('No media detected');
+    expect(view.container.textContent).toContain('player.test');
+    view.unmount();
+  });
+
+  it('asks for the site, then looks again once it is granted', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([]);
+    fake.setEmbeddedOrigins(['https://player.test']);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Allow player.test'));
+    await flush();
+
+    const requestIndex = fake.calls.indexOf('requestSiteAccess:https://player.test');
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    // The look must come after the grant, or it looks again at what it still cannot see.
+    expect(fake.calls.lastIndexOf('refreshDetection:7')).toBeGreaterThan(requestIndex);
+    view.unmount();
+  });
+
+  it('keeps the offer standing when the user declines, and shows no error', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([]);
+    fake.setEmbeddedOrigins(['https://player.test']);
+    fake.setSiteAccess(false);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Allow player.test'));
+    await flush();
+
+    // Declining is an answer, not a fault: nothing is retried and nothing is reported.
+    expect(view.container.textContent).toContain('The player is on another site');
+    expect(byName(view.container, 'Dismiss')).toBeUndefined();
+    view.unmount();
+  });
+
+  it('says nothing about a site the user already allowed', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([]);
+    fake.setEmbeddedOrigins(['https://player.test'], true);
+    const view = await mount(fake);
+
+    expect(view.container.textContent).toContain('No media detected');
+    expect(view.container.textContent).not.toContain('The player is on another site');
+    view.unmount();
+  });
+
+  it('offers the grant alongside results when something was found anyway', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'a', title: 'Clip', url: 'https://cdn.test/clip.mp4' })]);
+    fake.setEmbeddedOrigins(['https://player.test']);
+    const view = await mount(fake);
+
+    // One card found in the top document does not mean the frame holds nothing.
+    expect(view.container.textContent).toContain('Clip');
+    expect(requireByName(view.container, 'Allow player.test')).toBeDefined();
+    view.unmount();
+  });
+});
+
 describe('ui/popup PopupApp — why a job failed (§20.5)', () => {
   it('shows the reason on a failed job, not just the word "Failed"', async () => {
     const fake = createFakeRuntimeClient();

@@ -119,6 +119,15 @@ export const MAX_OBSERVED_URLS = 500;
 export const MAX_OBSERVED_RESOURCES = 200;
 
 /**
+ * Cross-origin frame origins one report may name (§8.10, §13.7).
+ *
+ * A page embeds a handful of players at most; the list exists so the user can be
+ * asked about the origin their video actually lives on, not so a page can hand the
+ * runtime an unbounded list of hosts to offer.
+ */
+export const MAX_FRAME_ORIGINS = 8;
+
+/**
  * The title an item carries when nothing named it — no candidate title, no filename,
  * no document title. Shared because the scorer must be able to tell a real title from
  * this placeholder: it used to reward "has a title", which every item satisfies, so

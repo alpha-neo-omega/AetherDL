@@ -38,6 +38,11 @@ export interface ContentObserverDeps {
   /** How many frames this document embeds; the background uses it to decide whether
    *  reaching into frames is worth doing at all. */
   readonly frameCount?: () => number;
+  /**
+   * The cross-origin origins this document embeds. Injected for the same reason as
+   * the rest: the observer stays a pure function of its dependencies (§8.10).
+   */
+  readonly frameOrigins?: () => readonly string[];
   /** Deliver a report to the background. */
   readonly sendReport: (report: DetectionReport) => void;
   /**
@@ -67,12 +72,14 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
     const title = deps.documentTitle?.();
     const resources = deps.observedResources?.() ?? [];
     const frames = deps.frameCount?.() ?? 0;
+    const frameOrigins = deps.frameOrigins?.() ?? [];
     const report: DetectionReport = {
       pageUrl,
       domSignals,
       observedUrls,
       ...(resources.length > 0 && { observedResources: resources }),
       ...(frames > 0 && { frameCount: frames }),
+      ...(frameOrigins.length > 0 && { frameOrigins }),
       ...(title !== undefined && title !== '' && { documentTitle: title }),
       ...(deps.frameId !== undefined && { frameId: deps.frameId }),
     };

@@ -41,6 +41,11 @@ export const EN_MESSAGES = {
   'popup.loading.detail': 'Reading what this tab has detected.',
   'popup.empty.title': 'No media detected',
   'popup.empty.detail': 'Play or open media on this page, then reopen AetherDL.',
+  'popup.embed.title': 'The player is on another site',
+  'popup.embed.detail':
+    'This page plays its video inside {origin}. AetherDL cannot see into that site until you allow it.',
+  'popup.embed.action': 'Allow {origin}',
+  'popup.embed.hint': 'You can undo this any time in Settings → Site access.',
   'popup.noMatches.title': 'No matches',
   'popup.noMatches.detail': 'No detected media matches your search or filter.',
   'popup.retry': 'Retry',

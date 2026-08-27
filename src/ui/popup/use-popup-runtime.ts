@@ -47,6 +47,13 @@ export interface PopupRuntimeData {
   readonly notice: AppError | undefined;
   /** The stream whose qualities the user is choosing from, if any (§10.6). */
   readonly chooser: QualityChooser | undefined;
+  /**
+   * Origins whose embedded player this page's media lives inside, and which the user
+   * has not opted in (§13.7). Non-empty means there is a question worth putting to
+   * them: until it is answered the extension cannot see into that frame at all, so
+   * "nothing detected" may mean "not allowed to look" rather than "nothing there".
+   */
+  readonly embeddedOrigins: readonly string[];
 }
 
 export interface PopupRuntimeActions {
@@ -62,6 +69,11 @@ export interface PopupRuntimeActions {
   dismissNotice(): void;
   /** Read what this stream offers and open the chooser (§10.6). */
   chooseQuality(item: MediaItem): void;
+  /**
+   * Ask the user to opt the embedding origins in, then look again (§13.7). Declining
+   * simply leaves the prompt in place; nothing is retried behind their back.
+   */
+  allowEmbeddedAccess(): void;
   /** Queue one item at the rendition the user picked. */
   downloadRendition(itemId: string, renditionId: string): void;
   closeChooser(): void;
@@ -82,7 +94,8 @@ type Action =
   | { readonly type: 'dismiss' }
   | { readonly type: 'chooser-open'; readonly item: MediaItem }
   | { readonly type: 'chooser-ready'; readonly renditions: readonly StreamRenditionSnapshot[] }
-  | { readonly type: 'chooser-close' };
+  | { readonly type: 'chooser-close' }
+  | { readonly type: 'embeds'; readonly origins: readonly string[] };
 
 const INITIAL: PopupRuntimeData = {
   status: 'loading',
@@ -91,6 +104,7 @@ const INITIAL: PopupRuntimeData = {
   error: undefined,
   notice: undefined,
   chooser: undefined,
+  embeddedOrigins: [],
 };
 
 /**
@@ -130,6 +144,7 @@ function reducer(state: PopupRuntimeData, action: Action): PopupRuntimeData {
         error: undefined,
         notice: state.notice,
         chooser: state.chooser,
+        embeddedOrigins: state.embeddedOrigins,
       };
     case 'items':
       return { ...state, items: action.items };
@@ -156,6 +171,8 @@ function reducer(state: PopupRuntimeData, action: Action): PopupRuntimeData {
           };
     case 'chooser-close':
       return state.chooser === undefined ? state : { ...state, chooser: undefined };
+    case 'embeds':
+      return { ...state, embeddedOrigins: action.origins };
     default:
       return state;
   }
@@ -171,6 +188,10 @@ export function usePopupRuntime(
   // `actions` depend on them (which would rebuild every handler on each detection).
   const itemsRef = useRef<readonly MediaItem[]>([]);
   itemsRef.current = state.items;
+  // Same reason as `itemsRef`: the grant handler reads the current list without the
+  // action callbacks having to be rebuilt whenever it changes.
+  const embedsRef = useRef<readonly string[]>([]);
+  embedsRef.current = state.embeddedOrigins;
 
   const refreshQueue = useCallback((): void => {
     void client.queryQueue().then(
@@ -182,6 +203,30 @@ export function usePopupRuntime(
       },
     );
   }, [client]);
+
+  /**
+   * Find out whether this page hides its player inside a frame belonging to someone
+   * else, and whether that someone is already opted in.
+   *
+   * Read-only: this asks what the page embeds and what has been granted. Nothing is
+   * requested here — a permission prompt belongs to a click, not to a render (§13.7).
+   */
+  const checkEmbeds = useCallback(
+    (tabId: number): void => {
+      void (async (): Promise<void> => {
+        try {
+          const origins = await client.embeddedOrigins(tabId);
+          const pending =
+            origins.length === 0 || (await client.hasSiteAccess(origins)) ? [] : origins;
+          dispatch({ type: 'embeds', origins: pending });
+        } catch {
+          // Not knowing whether to offer the prompt is not worth a notice: the popup
+          // simply does not offer it (§20.7).
+        }
+      })();
+    },
+    [client],
+  );
 
   // Initial load, and every explicit retry. Detection results are per-tab (§4.1).
   useEffect(() => {
@@ -202,6 +247,7 @@ export function usePopupRuntime(
           // the page (§13.7). What is already known is shown immediately; anything
           // the fresh observation adds arrives on the detection stream (§4.1).
           void client.refreshDetection(tabId).catch(() => undefined);
+          checkEmbeds(tabId);
         }
       } catch (cause) {
         if (!cancelled) {
@@ -212,7 +258,7 @@ export function usePopupRuntime(
     return () => {
       cancelled = true;
     };
-  }, [client, reloadToken]);
+  }, [checkEmbeds, client, reloadToken]);
 
   // Pushed runtime updates. Progress patches in place; anything that can change
   // queue membership re-reads the queue, which stays the source of truth (§4.4).
@@ -240,12 +286,14 @@ export function usePopupRuntime(
           dispatch({ type: 'notice', error: toAppError(cause) });
         },
       );
+      // A frame the page added after the first pass is a new question to ask.
+      checkEmbeds(tabId);
     });
     return () => {
       offDownload();
       offDetection();
     };
-  }, [client, refreshQueue]);
+  }, [checkEmbeds, client, refreshQueue]);
 
   const actions = useMemo<PopupRuntimeActions>(() => {
     const run = (operation: Promise<void>): void => {
@@ -340,6 +388,33 @@ export function usePopupRuntime(
               dispatch({ type: 'notice', error: toAppError(cause) });
             },
           );
+      },
+      allowEmbeddedAccess: () => {
+        const origins = embedsRef.current;
+        if (origins.length === 0) {
+          return;
+        }
+        // First statement in the handler, nothing awaited before it: the browser
+        // accepts a permission request only while the click is still live (§13.7).
+        void client.requestSiteAccess(origins).then(
+          (granted) => {
+            if (!granted) {
+              // Declining is an answer. The prompt stays, nothing is retried, and no
+              // error is shown for a choice the user made deliberately (§2.8).
+              return;
+            }
+            dispatch({ type: 'embeds', origins: [] });
+            const tabId = tabIdRef.current;
+            if (tabId !== undefined) {
+              // Now that the frame may be entered, look again: its own observations
+              // arrive as their own detection run (§8.10).
+              void client.refreshDetection(tabId).catch(() => undefined);
+            }
+          },
+          (cause: unknown) => {
+            dispatch({ type: 'notice', error: toAppError(cause) });
+          },
+        );
       },
       downloadRendition: (itemId, renditionId) => {
         dispatch({ type: 'chooser-close' });

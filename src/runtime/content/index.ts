@@ -9,7 +9,7 @@
  *          detached on unload (§12.8). Coverage-excluded (touches DOM globals); the
  *          observable logic lives in ./observer and ./scan and is unit-tested.
  */
-import { MAX_OBSERVED_RESOURCES } from '@shared/constants';
+import { MAX_FRAME_ORIGINS, MAX_OBSERVED_RESOURCES } from '@shared/constants';
 import type { WireObservedResource } from '@shared/types';
 import { resolveWebExtApi } from '@platform/browser/webext';
 import { createMessageBus } from '@platform/messaging/service';
@@ -74,6 +74,50 @@ function observedResources(): readonly WireObservedResource[] {
   return out;
 }
 
+/**
+ * The distinct cross-origin origins this document embeds players from.
+ *
+ * Read from the frame elements' own `src` attributes — the one thing about a
+ * cross-origin frame a page IS allowed to see. Nothing is loaded, nothing is entered:
+ * the frame's document stays as unreachable as it was. The origins travel to the
+ * background so a surface can name the site and ask the user whether to opt it in
+ * (§8.10, §13.7).
+ *
+ * Same-origin frames are left out because they are already reachable, and non-http
+ * frames (`about:blank`, `data:`, a sandboxed shell) because no host permission
+ * exists to grant for them.
+ */
+function frameOrigins(): readonly string[] {
+  const out = new Set<string>();
+  let frames: readonly Element[] = [];
+  try {
+    frames = [...document.querySelectorAll('iframe, frame')];
+  } catch {
+    return [];
+  }
+  for (const frame of frames) {
+    if (out.size >= MAX_FRAME_ORIGINS) {
+      break;
+    }
+    const src = frame.getAttribute('src');
+    if (src === null || src === '') {
+      continue;
+    }
+    try {
+      const url = new URL(src, location.href);
+      if (
+        (url.protocol === 'https:' || url.protocol === 'http:') &&
+        url.origin !== location.origin
+      ) {
+        out.add(url.origin);
+      }
+    } catch {
+      // A malformed `src` names no origin to ask about.
+    }
+  }
+  return [...out];
+}
+
 function start(): void {
   const world = globalThis as Record<string, unknown>;
   if (world[ALREADY_INJECTED] === true) {
@@ -91,6 +135,7 @@ function start(): void {
     documentTitle: () => document.title,
     observedResources,
     frameCount: () => document.querySelectorAll('iframe, frame').length,
+    frameOrigins,
     sendReport: (report) => {
       void bus.send('detection/run', report).catch(() => undefined);
     },

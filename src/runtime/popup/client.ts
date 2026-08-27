@@ -120,6 +120,34 @@ export function createPopupRuntimeClient(browser: Browser): PopupRuntimeClient {
       return browser.permissions.requestHosts([...origins]);
     },
 
+    /**
+     * The origins whose frames hold this page's player, filtered to the ones still
+     * worth asking about: the tab's own origin is already covered by `activeTab`.
+     */
+    async embeddedOrigins(tabId: number): Promise<readonly string[]> {
+      const origins = await bus.send('detection/embeds', { tabId });
+      return origins.filter((origin) => origin !== activeOrigin);
+    },
+
+    hasSiteAccess(origins: readonly string[]): Promise<boolean> {
+      if (origins.length === 0) {
+        return Promise.resolve(true);
+      }
+      return browser.permissions.containsHosts(origins.map((origin) => `${origin}/*`));
+    },
+
+    /**
+     * Issued directly from the click handler with nothing awaited first, for the same
+     * reason as {@link requestStreamAccess}: an `await` before the request spends the
+     * user gesture the browser requires for it.
+     */
+    requestSiteAccess(origins: readonly string[]): Promise<boolean> {
+      if (origins.length === 0) {
+        return Promise.resolve(true);
+      }
+      return browser.permissions.requestHosts(origins.map((origin) => `${origin}/*`));
+    },
+
     cancel(taskId: string): Promise<void> {
       return bus.send('download/cancel', { taskId });
     },

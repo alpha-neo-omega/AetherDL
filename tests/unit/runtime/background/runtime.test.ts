@@ -625,6 +625,50 @@ describe('background detection runtime — reaching into frames (§8.10)', () =>
     );
   });
 
+  it('reaches into frames again on an explicit refresh', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send('detection/run', framedReport(1));
+    await flush();
+    await client.send('detection/refresh', { tabId: 7 });
+    await flush();
+
+    // The once-per-page guard keeps automatic passes cheap. It must not outlast a
+    // refresh: the reason a surface refreshes is usually that what may be entered has
+    // just changed — the user opted the embedding site in (§13.7).
+    expect(
+      fake.scripting.executed.filter((call) => call.target.allFrames === true).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('reports the origins a page embeds, and grants nothing by reporting them', async () => {
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    await client.send(
+      'detection/run',
+      report({
+        pageUrl: PAGE,
+        frameCount: 1,
+        frameOrigins: ['https://player.test/e/abc' as string],
+      }),
+    );
+    await flush();
+
+    expect(await client.send('detection/embeds', { tabId: 7 })).toEqual(['https://player.test']);
+    // Answering the question is not answering FOR the user: no permission was asked
+    // for and none was taken (§13.7).
+    expect([...fake.grantedOrigins]).toEqual([]);
+  });
+
+  it('reports no embedded origins for a tab it has never seen', async () => {
+    const { client } = setup();
+    expect(await client.send('detection/embeds', { tabId: 99 })).toEqual([]);
+  });
+
   it('reaches into frames again after the tab navigates', async () => {
     const { fake, client, engine } = setup();
     fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);

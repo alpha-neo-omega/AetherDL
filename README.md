@@ -24,7 +24,7 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.7.0 — one card per video, 2026-08-27.** Built on the 1.0.0
+**1.8.0 — the player on another site, 2026-08-27.** Built on the 1.0.0
 stable release: per-tab media detection, downloads through the browser's own download manager
 with a durable queue, retry and pause/resume, settings, local history, popup and settings
 surfaces, and the optional context-menu and notification integrations. Then 1.1.0 added stream
@@ -32,7 +32,8 @@ downloading, 1.2.0–1.2.2 fixed 33 defects across three sweeps, 1.2.3 gave the 
 icon, 1.3.0 joined split-track fragmented-MP4 streams, 1.4.0 added a stream quality picker and
 joined split-track MPEG-TS streams, 1.5.0 finds media that hides behind false file names and
 rides out a host that rate-limits the download, 1.6.0 looks inside iframes, where most
-embedded players actually live, and 1.7.0 offers one card per video instead of three.
+embedded players actually live, 1.7.0 offers one card per video instead of three, and 1.8.0
+detects a player embedded from another site once you opt that site in.
 
 1.1.0 added, at the Project Owner's direction:
 
@@ -89,6 +90,32 @@ slipped in: [ADR-012](docs/adr/012-detection-time-content-probing.md) and
 simply fails and detection is no worse than before. It reads only URLs the page already loaded,
 never a URL it constructs. And it still **sends nothing**: no analytics, no telemetry, no beacon,
 no account, no backend.
+
+### When the player is on another site (1.8.0)
+
+1.6.0 taught AetherDL to look inside frames, because most embedded players live in one. That fixed
+the sites whose embed is **same-origin**, and did nothing for the ones whose embed is not: the
+`activeTab` permission covers the tab's own origin and stops at a frame belonging to someone else.
+Injection reached the top document only, the player's requests were never observed, and the popup
+said "No media detected" — which was not true. It could not look.
+
+The top document can see one thing about such a frame: the origin in its `src`. AetherDL now reports
+that, names the site, and asks:
+
+> **The player is on another site.** This page plays its video inside `player.example`. AetherDL
+> cannot see into that site until you allow it. — *Allow player.example*
+
+Your click grants access to **that origin only**, and it is what lets the extension observe the
+frame at all. Nothing is entered, fetched or requested before you click; declining leaves the offer
+standing and reports no error. Every granted site is listed in Settings with a Revoke, and a site
+you have already allowed is never mentioned again. Nested embeds are asked about one at a time, as
+each becomes visible, rather than demanding a blanket grant up front.
+
+The rule this follows was already written: [PROJECT_BIBLE.md §13.7](PROJECT_BIBLE.md#137-permissions)
+— "optional, per-origin host permissions only when a user explicitly opts a site in, and revocable".
+See [ADR-013](docs/adr/013-per-site-access-for-embedded-players.md). It also **stops being a
+detection-only fix**: the same grant lifts CORS on AetherDL's own reads of that origin, so a host
+that answers no cross-origin request becomes readable once you opt it in.
 
 ### Choosing a quality (1.4.0)
 
@@ -165,7 +192,7 @@ that matter to a user:
   nothing had asked for host access. Every path asks now.
 - **Site access is listed in Settings**, with a Revoke for each granted origin.
 
-Known limitations at 1.4.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
+Known limitations at 1.8.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
 
 - **Only H.264 video and AAC audio can be joined.** A split-track stream whose rendition
   carries AC-3, E-AC-3, HEVC or MP3 audio is refused, with the stream types named, rather
@@ -183,8 +210,10 @@ Known limitations at 1.4.0, stated in full in [CHANGELOG.md](CHANGELOG.md):
   this project will take it. Progressive downloads are unaffected.
 - The quality chooser needs the media host granted in order to read the manifest; declining
   leaves the download available at the preferred quality.
-- Network-request observation is not implemented; detection reads the page's DOM. A site that
-  loads its playlist purely through a script (hls.js and friends) may not be detected.
+- Detection reads the page's DOM, the page's own performance timeline, and the first bytes of a
+  few of those resources (1.5.0). It does **not** intercept requests. A site that is neither in the
+  DOM nor in the timeline of a frame AetherDL may observe is still not detected — which, since
+  1.8.0, is usually a site you have not opted in.
 - DRM-protected media is refused by design and always will be.
 - The _Warn about duplicates_ setting is stored but inert: nothing compares detected media against
   download history. The popup does flag media already in the queue.

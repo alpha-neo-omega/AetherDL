@@ -55,6 +55,24 @@ export interface PopupRuntimeClient {
    * request from a live user gesture.
    */
   requestStreamAccess(urls: readonly string[]): Promise<boolean>;
+  /**
+   * `detection/embeds` — the cross-origin origins this tab embeds players from, and
+   * which the extension is not allowed to look inside of (§13.7). A name in this list
+   * is a question to put to the user, never an access that was taken.
+   */
+  embeddedOrigins(tabId: number): Promise<readonly string[]>;
+  /**
+   * Which of those origins the user has already opted in. Read, never requested: this
+   * decides whether there is anything left to ask about.
+   */
+  hasSiteAccess(origins: readonly string[]): Promise<boolean>;
+  /**
+   * Ask the user to opt these origins in, so the player embedded from them can be
+   * observed at all (§13.7, §4.15). Resolves `false` when they decline, which is a
+   * normal answer and not an error. MUST be called first in the click handler — a
+   * browser only accepts a permission request from a live user gesture.
+   */
+  requestSiteAccess(origins: readonly string[]): Promise<boolean>;
   cancel(taskId: string): Promise<void>;
   retry(taskId: string): Promise<void>;
   pause(taskId: string): Promise<void>;

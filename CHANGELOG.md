@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] — The player on another site
+
+### Added
+
+- **A page whose player is embedded from another origin can now be detected — with the user's
+  permission, per site.** 1.6.0 taught the extension to look inside frames, which fixed the hosts
+  whose embed is same-origin. It did nothing for the ones whose embed is not: `activeTab` grants
+  the tab's own origin and stops at a frame belonging to someone else, so `allFrames` injection
+  reached the top document only and detection returned nothing at all. Measured on a real page,
+  the top frame held two favicons and one `CROSS` iframe — the player, its playlist, its segments
+  and its `blob:` URL were all inside it.
+
+  The top document now reports the **origins** it embeds, read from the frame elements' own `src`
+  attributes — the one thing about a cross-origin frame a page may see. Nothing is entered and
+  nothing is fetched to learn it. The popup names that site and offers the grant; the click
+  requests host access for those origins only, and the frame's own observations then arrive as its
+  own report. Nested embeds resolve by iteration: a granted frame reports what **it** embeds, so
+  the next question is asked in turn instead of demanding a blanket grant. See
+  [ADR-013](docs/adr/013-per-site-access-for-embedded-players.md).
+
+  This applies [§13.7](PROJECT_BIBLE.md#137-host-permission-policy) as written — "optional,
+  per-origin host permissions only when a user explicitly opts a site in, and revocable" — and
+  **amends nothing**. No standing host permission, none requested at install, none taken without a
+  click, and every grant is listed in Settings with a Revoke. Declining leaves the offer standing
+  and reports no error, because declining is an answer.
+
+  The same grant lifts CORS on the extension's own reads of that origin, so a host that sends no
+  `Access-Control-Allow-Origin` becomes readable once it is opted in.
+
+### Changed
+
+- **"No media detected" is no longer said when the truth is "not allowed to look".** A page whose
+  player sits in a frame belonging to someone else now says so, and offers the grant, instead of
+  reporting an empty page ([§2.8](PROJECT_BIBLE.md#28-honesty)). The offer also appears alongside
+  results, because one card found in the top document does not mean the frame holds nothing.
+- **An explicit refresh re-enters a page's frames.** The once-per-page guard added in 1.6.0 keeps
+  automatic passes cheap, but the usual reason a surface refreshes is that what may be entered has
+  just changed. A merged report now carries its frame count and embedded origins through, which a
+  refresh reads.
+
+### Verification
+
+`npm run ci` exits 0 — 1284 unit tests (+1 skipped), 69 performance assertions, both builds,
+manifest validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases.
+Coverage 96.16 % statements / 90.85 % branches. The new e2e drives a genuinely cross-origin frame
+and was **confirmed red** with the feature removed.
+
+### Not changed
+
+- **DRM remains refused, permanently.** Encrypted media stays unsupported, no key is fetched,
+  followed or handled, and nothing here decrypts anything
+  ([§6](PROJECT_BIBLE.md#6-drm-and-legal-boundaries), ADR-005, §25.3 non-amendable). Sites are
+  undetectable for want of *access*, not for want of decryption; this release fixes the former and
+  leaves the latter refused.
+
 ## [1.7.0] — One card per video
 
 ### Changed

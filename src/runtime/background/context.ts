@@ -6,10 +6,15 @@
  *          shape to the core input; the engine is used exactly as implemented.
  * Restrictions: Runtime layer — pure mapping/validation; no browser globals. Bounds
  *          untrusted input (caps counts) and drops malformed signals.
- * Public API: MAX_SIGNALS, MAX_URLS, MAX_RESOURCES, isDetectionReport,
- *          buildDetectionContext, observedResourcesFrom.
+ * Public API: MAX_SIGNALS, MAX_URLS, MAX_RESOURCES, MAX_ORIGINS, isDetectionReport,
+ *          buildDetectionContext, observedResourcesFrom, frameOriginsFrom.
  */
-import { MAX_DOM_SIGNALS, MAX_OBSERVED_RESOURCES, MAX_OBSERVED_URLS } from '@shared/constants';
+import {
+  MAX_DOM_SIGNALS,
+  MAX_FRAME_ORIGINS,
+  MAX_OBSERVED_RESOURCES,
+  MAX_OBSERVED_URLS,
+} from '@shared/constants';
 import type { DetectionReport, WireDomSignal } from '@shared/types';
 import type { DetectionContext, DomSignal, DomSignalRole } from '@core/detection/pipeline';
 import type { ObservedResource } from '@core/detection/probe';
@@ -22,6 +27,7 @@ import type { ObservedResource } from '@core/detection/probe';
 export const MAX_SIGNALS = MAX_DOM_SIGNALS;
 export const MAX_URLS = MAX_OBSERVED_URLS;
 export const MAX_RESOURCES = MAX_OBSERVED_RESOURCES;
+export const MAX_ORIGINS = MAX_FRAME_ORIGINS;
 
 /** An initiator name is a short enum-like token; anything longer is not one. */
 const MAX_INITIATOR_LENGTH = 32;
@@ -151,6 +157,34 @@ export function observedResourcesFrom(
     });
   }
   return out;
+}
+
+/**
+ * The cross-origin origins a report says the page embeds, validated (§13.8).
+ *
+ * These names end up in a permission prompt with the user's finger over "Allow", so
+ * they are re-derived here rather than trusted: only `http(s)`, only a bare origin —
+ * never a path, a wildcard, or whatever else a hostile page put in a `src` — and
+ * capped. A page cannot use this to get itself asked about on someone else's behalf.
+ */
+export function frameOriginsFrom(report: DetectionReport): readonly string[] {
+  const raw = Array.isArray(report.frameOrigins) ? report.frameOrigins : [];
+  const out = new Set<string>();
+  for (const entry of raw.slice(0, MAX_ORIGINS)) {
+    const value = str(entry);
+    if (value === undefined) {
+      continue;
+    }
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        out.add(url.origin);
+      }
+    } catch {
+      // Not a URL, so not an origin anyone can be asked about.
+    }
+  }
+  return [...out];
 }
 
 /**
