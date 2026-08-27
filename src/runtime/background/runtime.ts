@@ -118,6 +118,11 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   const runTokens = new Map<number, number>();
   /** Page URL whose frames have already been reached, per tab. */
   const framesObserved = new Map<number, string>();
+  /**
+   * The set of identified resources the last enriched pass ran over, per tab. Compared
+   * rather than recomputed, so an unchanged set costs nothing (§12.1).
+   */
+  const enrichSignatures = new Map<number, string>();
   const bumpToken = (tabId: number): number => {
     const next = (runTokens.get(tabId) ?? 0) + 1;
     runTokens.set(tabId, next);
@@ -150,19 +155,35 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
     report: DetectionReport,
     source: 'dom' | 'manual',
   ): Promise<readonly MediaItem[]> => {
-    state.setReport(tabId, report);
+    const changed = state.setReport(tabId, report);
     observeFrames(tabId, report);
+    const token = bumpToken(tabId);
+    // What was identified for this page earlier is part of what the page HAS, even
+    // when the timeline it was read from has since evicted it (§4.1). Supplying it
+    // to the first pass is also what keeps a stream card from blinking out and back
+    // every time the popup is opened.
+    const known = state.getResources(tabId);
+    const base = buildDetectionContext(report, tabId, source, clock());
+    const context = known.length > 0 ? { ...base, networkResources: known } : base;
+
+    // A page that is merely PLAYING mutates several times a second — a ticking time
+    // display is a childList mutation — and the content script re-reports on each. An
+    // identical report cannot yield a different DOM result, and the pipeline measured
+    // at 7 ms median / 36 ms worst was being run twice for every one of them, on the
+    // user's machine, next to the video that is decoding (§12.1, §12.4).
+    //
+    // The probe still gets its turn: it works through a few URLs per pass, so repeated
+    // reports are how a long list eventually gets identified. What is skipped is only
+    // the part that provably cannot have changed.
+    if (!changed && source === 'dom' && state.getTab(tabId)?.status === 'detected') {
+      const settled = state.getItems(tabId);
+      void enrich(tabId, report, context, settled, token);
+      return settled;
+    }
+
     state.setStatus(tabId, 'running');
     state.beginOperation(tabId);
-    const token = bumpToken(tabId);
     try {
-      // What was identified for this page earlier is part of what the page HAS, even
-      // when the timeline it was read from has since evicted it (§4.1). Supplying it
-      // to the first pass is also what keeps a stream card from blinking out and back
-      // every time the popup is opened.
-      const known = state.getResources(tabId);
-      const base = buildDetectionContext(report, tabId, source, clock());
-      const context = known.length > 0 ? { ...base, networkResources: known } : base;
       const items = await engine.detect(context);
       // A newer run or an invalidation (navigation/clear) superseded this one while
       // detectors ran — drop the stale result rather than clobber current state.
@@ -226,6 +247,15 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
       }
       state.rememberResources(tabId, found);
       const networkResources = state.getResources(tabId);
+      // The probe answers from its cache for a URL it has already read, so `found` is
+      // non-empty on every pass once anything has been identified — including the
+      // thousands of passes where it identified nothing NEW. Detecting again on those
+      // is the second half of the same waste the first pass just avoided (§12.1).
+      const signature = networkResources.map((resource) => resource.url).join('\n');
+      if (enrichSignatures.get(tabId) === signature) {
+        return;
+      }
+      enrichSignatures.set(tabId, signature);
       // The cache is keyed per tab and would answer with the first pass's result; the
       // enriched context is a different question (§9.9).
       engine.invalidate(tabId);
@@ -293,6 +323,7 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
 
   const clearTab = (tabId: number): void => {
     bumpToken(tabId);
+    enrichSignatures.delete(tabId);
     engine.invalidate(tabId);
     state.clearDetection(tabId);
     void badge.clear(tabId);
@@ -301,6 +332,7 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   /** Fully drop a gone tab: invalidate its in-flight run, cache, state, and badge. */
   const dropTab = (tabId: number): void => {
     framesObserved.delete(tabId);
+    enrichSignatures.delete(tabId);
     runTokens.delete(tabId); // a still-in-flight run for this tab fails its token check
     engine.invalidate(tabId);
     state.removeTab(tabId);

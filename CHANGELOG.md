@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.4] — A page that is only playing costs nothing
+
+### Fixed
+
+- **Opening AetherDL on a playing video made the browser lag until the video stopped.** Reported
+  from the field with an exact repro, and it was a fair description of what the code did. There is
+  no declared content script, so before the toolbar is clicked the extension costs a page nothing.
+  The click injects into the top document **and every frame in the tab**, and each injected observer
+  re-observes on every DOM mutation. A playing video mutates several times a second — a ticking time
+  display is a childList mutation — so each frame then, five times a second, for as long as playback
+  continued: built a report, sent it across processes carrying up to several hundred observations,
+  and drove the full detection pipeline **twice** in the background, once for the DOM and once after
+  the probe. Detection measures 7.4 ms median and 35.7 ms worst on a media-heavy page, so a page
+  doing nothing but playing was costing roughly 74 ms of CPU per second per frame, and up to 350 ms
+  per second at the worst case, next to a decoding video.
+
+  Three changes, each measured:
+  - **An observation identical to the last one is no longer sent.** Serialising the report costs
+    tens of microseconds and saves the message and everything downstream of it.
+  - **A page that keeps changing without changing anything relevant is scanned progressively less
+    often** — the debounce doubles up to 2 s while scans find nothing new, and resets the instant
+    something does.
+  - **The background does not re-run the pipeline for a report that says the same thing**, and the
+    probe pass no longer re-detects when it identified nothing new. The probe still runs on every
+    report, because that is how a long list of URLs gets worked through a few at a time.
+
+  A manual refresh still runs in full, and re-injection still forces a report — the background's
+  state is in-memory, so "nothing changed since I last told you" is not an answer it can use.
+
+### Added
+
+- **Performance budgets for repeated work** (`tests/performance/idle-page-cost.test.ts`,
+  `content-scan-cost.test.ts`). The suite measured a single detection pass and a single scan, so it
+  could not see the cost of doing either one thousands of times — which is the cost a user feels.
+  Thirty identical reports now assert **zero** extra pipeline runs; the same thirty produced 60
+  before this release. One observation on a 4 000-element page with a full timeline is measured at
+  0.45 ms and budgeted at 5 % of a core.
+
+### Verification
+
+`npm run ci` exits 0 — 1305 unit tests (+1 skipped), 74 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases. Every new
+budget was confirmed red against the code it replaces.
+
 ## [1.8.3] — The playlist is at the front of the queue
 
 ### Fixed

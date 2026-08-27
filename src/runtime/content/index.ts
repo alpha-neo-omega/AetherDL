@@ -21,8 +21,6 @@ import {
 } from '@runtime/content/timeline';
 import type { DocumentLike } from '@runtime/content/scan';
 
-const SCAN_DEBOUNCE_MS = 200;
-
 /**
  * Marker on the isolated world's global, so a second injection into the SAME page
  * does nothing. The background injects on every gesture-backed refresh (§8.10), and
@@ -143,8 +141,8 @@ function start(): void {
     sendReport: (report) => {
       void bus.send('detection/run', report).catch(() => undefined);
     },
-    scheduleScan: (run) => {
-      const handle = setTimeout(run, SCAN_DEBOUNCE_MS);
+    scheduleScan: (run, delayMs) => {
+      const handle = setTimeout(run, delayMs);
       return () => {
         clearTimeout(handle);
       };

@@ -57,6 +57,8 @@ interface MutableTab {
    * erase what another frame observed (§8.10, ADR-012).
    */
   reportsByFrame: Map<string, DetectionReport>;
+  /** Signature of each frame's last report, for deciding whether anything changed. */
+  signaturesByFrame: Map<string, string>;
   /**
    * Media resources IDENTIFIED for this page, kept until it navigates.
    *
@@ -88,8 +90,14 @@ export interface RuntimeState {
   setItems(tabId: number, items: readonly MediaItem[]): void;
   getItems(tabId: number): readonly MediaItem[];
   /** Store the last observations for a tab (used by refresh). */
-  /** Record one FRAME's report; frames are kept side by side, not replaced. */
-  setReport(tabId: number, report: DetectionReport): void;
+  /**
+   * Record one FRAME's report; frames are kept side by side, not replaced. Answers
+   * whether this frame's view of the page actually CHANGED — a page that mutates
+   * continuously re-reports the same observations several times a second, and running
+   * the pipeline again for an identical report cannot produce a different result
+   * (§12.1, §12.4).
+   */
+  setReport(tabId: number, report: DetectionReport): boolean;
   /**
    * Everything the tab's frames have observed, as one report — what detection runs
    * over. The top frame's URL is used as the page URL where one is known, because
@@ -158,6 +166,26 @@ const MAX_FRAMES_PER_TAB = 12;
  * where it reported at all; otherwise the first frame does, so a page whose only media
  * lives in a frame still gets a sensible name.
  */
+/**
+ * A frame's report reduced to a comparable string.
+ *
+ * Cheap next to what it saves: serialising a couple of hundred observations costs tens
+ * of microseconds, and it stands in for a detection pass measured at 7 ms median and
+ * 36 ms worst — paid twice per report, several times a second, on a page that is
+ * merely playing a video (§12.1).
+ */
+function signatureOf(report: DetectionReport): string {
+  return JSON.stringify([
+    report.pageUrl,
+    report.documentTitle ?? '',
+    report.frameCount ?? 0,
+    report.frameOrigins ?? [],
+    report.domSignals,
+    report.observedUrls,
+    report.observedResources ?? [],
+  ]);
+}
+
 function mergedReport(tab: MutableTab | undefined): DetectionReport | undefined {
   if (tab === undefined || tab.reportsByFrame.size === 0) {
     return undefined;
@@ -260,6 +288,7 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
         itemCount: 0,
         connected: false,
         reportsByFrame: new Map<string, DetectionReport>(),
+        signaturesByFrame: new Map<string, string>(),
         resources: new Map<string, NetworkResource>(),
         lastReport: undefined,
         lastItems: [],
@@ -320,8 +349,11 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
       return tabs.get(tabId)?.lastItems ?? [];
     },
 
-    setReport(tabId: number, report: DetectionReport): void {
+    setReport(tabId: number, report: DetectionReport): boolean {
       const tab = ensure(tabId);
+      const signature = signatureOf(report);
+      const changed = tab.signaturesByFrame.get(report.pageUrl) !== signature;
+      tab.signaturesByFrame.set(report.pageUrl, signature);
       // One slot per frame, keyed by the frame's own URL. Bounded so a page that
       // creates frames endlessly cannot grow this without limit (§10.9).
       if (
@@ -331,12 +363,14 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
         const oldest = tab.reportsByFrame.keys().next().value;
         if (oldest !== undefined) {
           tab.reportsByFrame.delete(oldest);
+          tab.signaturesByFrame.delete(oldest);
         }
       }
       tab.reportsByFrame.set(report.pageUrl, report);
       tab.lastReport = report;
       tab.connected = true;
       tab.updatedAt = clock();
+      return changed;
     },
 
     getReport(tabId: number): DetectionReport | undefined {
@@ -351,6 +385,7 @@ export function createRuntimeState(deps: RuntimeStateDeps): RuntimeState {
       const tab = ensure(tabId);
       tab.lastItems = [];
       tab.reportsByFrame.clear();
+      tab.signaturesByFrame.clear();
       tab.resources.clear();
       tab.lastReport = undefined;
       tab.itemCount = 0;

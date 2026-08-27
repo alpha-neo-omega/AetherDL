@@ -4,6 +4,15 @@
  *          (PROJECT_BIBLE.md §8.10). Debounces scans (performance budget, §12) and
  *          reports a `DetectionReport` to the background. Detection is NOT performed
  *          here; the report is the only output.
+ *
+ *          Two rules keep a playing video from costing anything: an observation that
+ *          says exactly what the last one said is not SENT, and a page that keeps
+ *          changing without changing anything relevant is scanned progressively less
+ *          often. A video page mutates several times a second for as long as it plays
+ *          — a ticking time display is a childList mutation — and every one of those
+ *          used to cost a full scan, a cross-process message carrying up to several
+ *          hundred observations, and two detection passes in the background (§12.1,
+ *          §12.4).
  * Restrictions: Runtime layer, isolated world. Pure of browser globals — the DOM
  *          event sources and messaging are injected by the entry (index.ts).
  * Public API: ContentObserver, ContentObserverDeps, createContentObserver.
@@ -15,7 +24,12 @@ import { scanDocument } from '@runtime/content/scan';
 export interface ContentObserver {
   /** Schedule a debounced scan + report. Call on readiness/mutation/media events. */
   notify(): void;
-  /** Scan + report immediately, cancelling any pending debounce. */
+  /**
+   * Scan + report immediately, cancelling any pending debounce, and report even if
+   * nothing has changed. That last part is the point: the background asks for this
+   * when its own state is gone (a suspended service worker), so "nothing changed
+   * since I last told you" is not an answer it can use.
+   */
   flush(): void;
   /** Cancel any pending scan (call on unload alongside detaching DOM sources). */
   dispose(): void;
@@ -49,11 +63,27 @@ export interface ContentObserverDeps {
    * Schedule `run` after the debounce interval; returns a cancel function. The entry
    * injects a real timer; tests inject a controllable one.
    */
-  readonly scheduleScan: (run: () => void) => () => void;
+  readonly scheduleScan: (run: () => void, delayMs: number) => () => void;
+  /**
+   * Debounce floor, and the interval an active page is scanned at. Grows up to
+   * {@link ContentObserverDeps.maxIntervalMs} while scans keep finding nothing new.
+   */
+  readonly intervalMs?: number;
+  readonly maxIntervalMs?: number;
 }
+
+/** Default debounce, and the ceiling backing off reaches on a page that never settles. */
+const DEFAULT_INTERVAL_MS = 200;
+const DEFAULT_MAX_INTERVAL_MS = 2000;
 
 export function createContentObserver(deps: ContentObserverDeps): ContentObserver {
   let cancelPending: (() => void) | undefined;
+  const baseInterval = deps.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const maxInterval = Math.max(baseInterval, deps.maxIntervalMs ?? DEFAULT_MAX_INTERVAL_MS);
+  /** What the last SENT report said, so an identical one can be left unsent. */
+  let lastSent: string | undefined;
+  /** Current debounce, doubled each time a scan finds nothing new. */
+  let interval = baseInterval;
 
   const clearPending = (): void => {
     if (cancelPending !== undefined) {
@@ -62,7 +92,7 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
     }
   };
 
-  const scanAndReport = (): void => {
+  const scanAndReport = (force: boolean): void => {
     cancelPending = undefined;
     // The page URL is also the base every relative `src`/`href` is resolved against;
     // without it a page whose media uses relative URLs reported paths the background
@@ -83,17 +113,32 @@ export function createContentObserver(deps: ContentObserverDeps): ContentObserve
       ...(title !== undefined && title !== '' && { documentTitle: title }),
       ...(deps.frameId !== undefined && { frameId: deps.frameId }),
     };
+
+    // Serialising the report costs tens of microseconds and saves a cross-process
+    // message carrying hundreds of observations, plus everything the background would
+    // do with it. On a page that is only playing, that is the whole cost.
+    const signature = JSON.stringify(report);
+    if (!force && signature === lastSent) {
+      // Nothing new to say. Say it less often, up to the ceiling — a page whose DOM
+      // never stops moving must not keep the extension scanning at full rate.
+      interval = Math.min(interval * 2, maxInterval);
+      return;
+    }
+    interval = baseInterval;
+    lastSent = signature;
     deps.sendReport(report);
   };
 
   return {
     notify(): void {
       clearPending();
-      cancelPending = deps.scheduleScan(scanAndReport);
+      cancelPending = deps.scheduleScan(() => {
+        scanAndReport(false);
+      }, interval);
     },
     flush(): void {
       clearPending();
-      scanAndReport();
+      scanAndReport(true);
     },
     dispose(): void {
       clearPending();
