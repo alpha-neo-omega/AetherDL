@@ -244,6 +244,68 @@ describe('core/detection resource probe', () => {
     await expect(probe.identify([observed(PLAYLIST)])).resolves.toStrictEqual([]);
   });
 
+  it('falls back to the name when a manifest cannot be read at all', async () => {
+    // The host answers no cross-origin request, so there are no bytes to prefer. What
+    // the URL claims is all that is left, and for a playlist it is worth reporting:
+    // the alternative is discarding a stream because we were not allowed to look.
+    const url = 'https://cdn.test/hls/playlist.m3u8';
+    const http = stubHttp({ [url]: new Error('CORS') });
+    const probe = createResourceProbe({ http: http.client });
+
+    await expect(probe.identify([observed(url)])).resolves.toStrictEqual([
+      { url, mimeType: 'application/vnd.apple.mpegurl' },
+    ]);
+  });
+
+  it('falls back for a DASH manifest too, and for nothing else', async () => {
+    const mpd = 'https://cdn.test/dash/manifest.mpd';
+    const disguised = 'https://cdn.test/media/abc.txt';
+    const image = 'https://cdn.test/poster.jpg';
+    const http = stubHttp({
+      [mpd]: new Error('CORS'),
+      [disguised]: new Error('CORS'),
+      [image]: new Error('CORS'),
+    });
+    const probe = createResourceProbe({ http: http.client });
+
+    // A name is a fallback for a manifest, never a substitute for bytes anywhere else:
+    // the disguised case is exactly the one a name answers WRONGLY (ADR-012).
+    await expect(
+      probe.identify([observed(mpd), observed(disguised), observed(image)]),
+    ).resolves.toStrictEqual([{ url: mpd, mimeType: 'application/dash+xml' }]);
+  });
+
+  it('prefers bytes over the name when the resource can be read', async () => {
+    // A `.m3u8` that is not a playlist is still not a playlist.
+    const url = 'https://cdn.test/hls/liar.m3u8';
+    const http = stubHttp({ [url]: utf8('<html>not a playlist</html>') });
+    const probe = createResourceProbe({ http: http.client });
+
+    await expect(probe.identify([observed(url)])).resolves.toStrictEqual([]);
+  });
+
+  it('spends its request budget on the manifests first', async () => {
+    // A page can load more candidates than the cap allows. Spending the budget in load
+    // order can miss the one resource that IS the stream.
+    const routes: Record<string, Uint8Array> = {};
+    const resources: ObservedResource[] = [];
+    for (let index = 0; index < PROBE_MAX_PER_RUN; index += 1) {
+      const url = `https://cdn.test/asset-${String(index)}.json`;
+      routes[url] = utf8('{}');
+      resources.push(observed(url));
+    }
+    const playlist = 'https://cdn.test/hls/master.m3u8';
+    routes[playlist] = utf8('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n');
+    resources.push(observed(playlist));
+
+    const http = stubHttp(routes);
+    const probe = createResourceProbe({ http: http.client });
+    const found = await probe.identify(resources);
+
+    expect(http.requested[0]).toBe(playlist);
+    expect(found.map((resource) => resource.url)).toStrictEqual([playlist]);
+  });
+
   it('stops when detection is cancelled', async () => {
     const routes: Record<string, Uint8Array> = {};
     const resources: ObservedResource[] = [];

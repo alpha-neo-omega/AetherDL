@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] — A stream that could not be read is not a stream that is not there
+
+### Fixed
+
+- **A manifest the extension is not allowed to READ is no longer discarded.** What a page fetched
+  reaches detection only through the probe, which identifies a resource by its first bytes. When
+  the host answers no cross-origin request there are no bytes to prefer — the fetch fails, and
+  everything the page said about that resource was thrown away with it. A player fetching
+  `.../playlist.m3u8` through script was therefore invisible, not because it was disguised but
+  because we were not allowed to look, which is the worse failure of the two. An unreadable
+  resource now falls back to what its name claims, and **only** for the two manifest extensions:
+  those are what a stream hangs off, and a wrong guess costs a card that fails to parse rather than
+  a silently wrong download. Bytes still win wherever bytes exist — a readable `.m3u8` that is not
+  a playlist is still not a playlist — and a disguised resource, the case a name answers wrongly,
+  is still dropped ([ADR-012](docs/adr/012-detection-time-content-probing.md) unchanged in
+  principle: names lie, but silence is not better than a name).
+- **The probe spends its request budget on the manifests first.** A page can load more candidates
+  than the per-run cap allows, and spending the budget in load order can miss the one resource that
+  is the stream.
+
+### Verification
+
+`npm run ci` exits 0 — 1288 unit tests (+1 skipped), 69 performance assertions, both builds,
+manifest validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases.
+
 ## [1.8.0] — The player on another site
 
 ### Added

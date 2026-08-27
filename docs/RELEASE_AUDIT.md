@@ -1,10 +1,10 @@
-# AetherDL 1.8.0 — Release Audit
+# AetherDL 1.8.1 — Release Audit
 
 > **Nothing has been submitted or published from this environment.** This records the security and
 > privacy audits required for release (PROJECT_BIBLE.md §22.11: "final
 > [security](PROJECT_BIBLE.md#1310-security-review-gate) +
 > [privacy audit](PROJECT_BIBLE.md#143-external-network-calls-by-the-extension)"), re-executed
-> against the `1.8.0` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
+> against the `1.8.1` build: the 1.1.0 stream feature set, three defect sweeps (thirteen in
 > 1.2.0, eight in 1.2.1, twelve in 1.2.2), the real icon set in 1.2.3, split-track stream muxing in
 > 1.3.0, user-chosen stream renditions with MPEG-TS and packed-audio demultiplexing in 1.4.0, and
 > — new in 1.5.0 — identifying media by its BYTES rather than by its file name, which is the first
@@ -41,19 +41,19 @@
 
 | Field | Value |
 |---|---|
-| Version | `1.8.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched. And 1.6.0 observes every frame the engine allows: a player inside an `/embed/` iframe — the usual arrangement — was previously invisible. 1.7.0 offers one card per video: the unfetchable `blob:` handle is not listed beside the stream feeding it, and a stream is offered as its master playlist rather than once per rendition. 1.8.0 reaches a player embedded from ANOTHER origin, which `activeTab` stops at: the page's cross-origin frame origins are named and the user opts that site in per origin, revocably ([ADR-013](adr/013-per-site-access-for-embedded-players.md)) |
+| Version | `1.8.0` — everything through 1.4.0, plus content sniffing ([ADR-012](adr/012-detection-time-content-probing.md)): a resource is identified by its first bytes rather than by its URL or `Content-Type`, so a playlist a host serves as `.txt` with `.css` segments is detected and downloaded correctly. Segments are retried where they fail, so a host that rate-limits mid-download no longer discards everything already fetched. And 1.6.0 observes every frame the engine allows: a player inside an `/embed/` iframe — the usual arrangement — was previously invisible. 1.7.0 offers one card per video: the unfetchable `blob:` handle is not listed beside the stream feeding it, and a stream is offered as its master playlist rather than once per rendition. 1.8.1 reaches a player embedded from ANOTHER origin, which `activeTab` stops at: the page's cross-origin frame origins are named and the user opts that site in per origin, revocably ([ADR-013](adr/013-per-site-access-for-embedded-players.md)) |
 | Source | one tree, two targets (`build/manifest/generate.ts`), no per-browser source fork (§7.2) |
 | Date audited | 2026-08-20 |
 | Audit method | executed commands, recorded below — not review by inspection alone |
-| Executed at 1.8.0 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1284 unit/integration tests (+1 skipped), 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 61 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
+| Executed at 1.8.1 | yes, after the version bump and repackage: `npm run ci` — typecheck, lint, format check, 1288 unit/integration tests (+1 skipped), 69 performance assertions, both builds, manifest validation, the security gate, packaging, and 61 browser e2e cases — **exit 0**. Nothing in this file is carried over from an earlier run |
 | Also executed, outside the gate | `npm run test:live`, **re-run at 1.5.0** because sniffing changed how every case decides what a resource is: **9 cases, all passed**, no verdict changed. Recorded in [LIVE_STREAM_CHECK.md](LIVE_STREAM_CHECK.md). Deliberately not part of `npm run ci`, because it needs the network ([§16.9](../PROJECT_BIBLE.md#169-real-world-stream-conformance)) |
 
 ### Artifacts
 
 | Target | Artifact | Bytes | Entries | SHA-256 | Stores served |
 |---|---|---|---|---|---|
-| chrome | `dist/release/aetherdl-1.8.0-chrome.zip` | 142 466 | 20 | `f0f89d35dcd63422f915acfd0f693d963017619e8ad2dbde76dac106e8b357c8` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
-| firefox | `dist/release/aetherdl-1.8.0-firefox.zip` | 142 532 | 20 | `ac41aa22a32dd7fc3076e17d37a464d05494578cf543f3309949af6bbe3d543b` | Firefox Add-ons (AMO) |
+| chrome | `dist/release/aetherdl-1.8.1-chrome.zip` | 142 536 | 20 | `b2b2fccca48a69e4e7b0439dc935187e8d10aa5b52bf550c014ad98b88547665` | Chrome Web Store, Microsoft Edge Add-ons, Opera add-ons, other Chromium-compatible stores |
+| firefox | `dist/release/aetherdl-1.8.1-firefox.zip` | 142 602 | 20 | `8798e4455b060c7eefe206f8cc8ab064b6d827d1ebd49853739d6b53466622cb` | Firefox Add-ons (AMO) |
 
 Both archives carry four entries more than `1.0.0` did: the assembly document
 (`offscreen.html`, `offscreen.js`) and the two chunks the stream code lives in.

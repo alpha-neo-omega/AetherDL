@@ -6,11 +6,12 @@
  *          injected {@link HttpClient} port. Bounded on every axis: how many URLs per
  *          run, how many bytes per URL, how long to wait, how much to remember. It
  *          reads; it never writes, follows a key, or decrypts (§6, ADR-005).
- * Dependencies: shared/utils (sniffing), platform/http (type only),
+ * Dependencies: shared/utils (sniffing, URL typing), platform/http (type only),
  *          core/detection/pipeline (NetworkResource), core/detection/probe (contract).
  * Public API: createResourceProbe.
  */
 import {
+  manifestTypeFromUrl,
   sniffFormat,
   sniffHlsRole,
   SNIFF_PREFIX_BYTES,
@@ -87,6 +88,34 @@ function groupOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * What a URL that could not be READ still says about itself.
+ *
+ * Bytes beat names, and where the bytes are available this module ignores names
+ * entirely — that is what it exists for. But a host that answers no cross-origin
+ * request leaves no bytes to prefer: the fetch fails, and everything the page told us
+ * about that resource is thrown away with it. A player fetching `.../playlist.m3u8`
+ * through script is then invisible, not because it was disguised but because we were
+ * not allowed to look, which is the worse failure of the two (§9.1, ADR-012).
+ *
+ * So an unreadable resource falls back to what its name claims, and ONLY for the two
+ * manifest extensions: those are the ones a stream hangs off, and a wrong guess costs
+ * a card that fails to parse rather than a silently wrong download. A disguised
+ * resource — the case names cannot answer — is still dropped, exactly as before.
+ */
+function namedManifest(url: string): Identified | undefined {
+  const type = manifestTypeFromUrl(url);
+  if (type === undefined) {
+    return undefined;
+  }
+  return {
+    resource: {
+      url,
+      mimeType: type === 'hls' ? MIME_OF_FORMAT.hls : MIME_OF_FORMAT.dash,
+    },
+  };
 }
 
 function isHttpUrl(url: string): boolean {
@@ -169,10 +198,10 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
           }),
       };
     } catch {
-      // A refused range, a CORS rejection, a timeout, an origin that is simply gone:
-      // none of these are errors the user should see. Detection carries on with what
-      // the DOM gave it (§20.7).
-      return null;
+      // A CORS rejection, a timeout, an origin that is simply gone: none of these are
+      // errors the user should see. What the resource NAMED itself is all that is left,
+      // and for a manifest that is still worth reporting (§20.7).
+      return namedManifest(resource.url) ?? null;
     }
   };
 
@@ -236,8 +265,15 @@ export function createResourceProbe(options: ResourceProbeOptions): ResourceProb
       }
 
       // Sequential and capped: a detection pass must not turn into a burst of
-      // requests at a host the user never asked to download from (§12.6).
-      for (const resource of pending.slice(0, maxPerRun)) {
+      // requests at a host the user never asked to download from (§12.6). Within that
+      // cap, a URL that already names itself a manifest goes first — a page can load
+      // more candidates than the cap allows, and spending the budget on the resource
+      // most likely to BE the stream beats spending it in load order.
+      const ordered = [
+        ...pending.filter((resource) => manifestTypeFromUrl(resource.url) !== undefined),
+        ...pending.filter((resource) => manifestTypeFromUrl(resource.url) === undefined),
+      ];
+      for (const resource of ordered.slice(0, maxPerRun)) {
         if (signal?.aborted === true) {
           break;
         }
