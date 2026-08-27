@@ -671,6 +671,29 @@ describe('background detection runtime — reaching into frames (§8.10)', () =>
     );
   });
 
+  it('does not re-inject every time a DIFFERENT frame of the same page reports', async () => {
+    // The guard was keyed on the REPORTING FRAME's url, not the page's. Two frames that
+    // each contain an iframe therefore alternated, and every alternation re-injected
+    // into every frame in the tab. Since re-injection also asks each running frame to
+    // report again, each injection produced the next alternating report: a closed loop
+    // that pegged a core for as long as the page kept reporting (§12.1).
+    const { fake, client, engine } = setup();
+    fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);
+    engine.setItems([]);
+
+    const top = report({ pageUrl: PAGE, frameCount: 1 });
+    const player = report({ pageUrl: 'https://player.test/e/abc', frameCount: 1 });
+    await client.send('detection/run', top);
+    await client.send('detection/run', player);
+    await client.send('detection/run', top);
+    await client.send('detection/run', player);
+    await flush();
+
+    expect(fake.scripting.executed.filter((call) => call.target.allFrames === true)).toHaveLength(
+      1,
+    );
+  });
+
   it('reaches into frames again on an explicit refresh', async () => {
     const { fake, client, engine } = setup();
     fake.setTabs([{ id: 7, active: true, url: PAGE, windowId: 1 }]);

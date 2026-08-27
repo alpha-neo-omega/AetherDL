@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] — The injection loop
+
+### Fixed
+
+- **The lag 1.8.4 was supposed to fix.** It was reported again, with the observation that the
+  tab-switch fix looked responsible. That was correct, and it names the real defect.
+
+  Frames are injected "once per page", but the guard was keyed on the url of **whichever frame
+  reported**, not on the tab's page (a mistake dating to 1.6.0). Two frames that each contain an
+  iframe therefore alternate: the top document reports, the guard records its url and injects into
+  every frame; the player frame reports, its url does not match, so it injects into every frame
+  again; the top document reports again, and so on without end.
+
+  1.8.3 then closed the circuit. Re-injection asks each already-running frame to report again —
+  necessary, because the background's state is in-memory and a suspended service worker comes back
+  knowing nothing — so every injection **produced the next alternating report**. A self-sustaining
+  loop of full-tab script injections, running for as long as the page kept reporting, which is the
+  whole time a video plays.
+
+  It also explains why 1.8.4 did not help: that forced report deliberately bypasses the
+  "don't send an identical observation" rule, so the loop ran straight through it. Four reports from
+  two frames produced **four** full-tab injections; they now produce **one**, asserted by a test
+  that was confirmed red first.
+
+  The guard is now keyed on the tab, cleared when it navigates and on an explicit refresh. One
+  consequence stated plainly: an iframe a page adds *after* the last injection is not observed until
+  the popup is opened again, which was the documented intent of "once per page" and is what the
+  broken guard was accidentally papering over.
+
+### Verification
+
+`npm run ci` exits 0 — 1306 unit tests (+1 skipped), 74 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases.
+
 ## [1.8.4] — A page that is only playing costs nothing
 
 ### Fixed

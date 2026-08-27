@@ -117,7 +117,12 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
   // current, so a stale in-flight result never overwrites newer state (§10.2).
   const runTokens = new Map<number, number>();
   /** Page URL whose frames have already been reached, per tab. */
-  const framesObserved = new Map<number, string>();
+  /**
+   * Tabs whose frames have been injected for the page they are currently on. A SET,
+   * not a url map: the guard is about the tab's page, and keying it on the url of
+   * whichever frame reported made two frames alternate forever — see `observeFrames`.
+   */
+  const framesObserved = new Set<number>();
   /**
    * The set of identified resources the last enriched pass ran over, per tab. Compared
    * rather than recomputed, so an unchanged set costs nothing (§12.1).
@@ -310,12 +315,22 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
    *
    * Best effort by design: frames the extension may not touch are skipped by the
    * browser, and a frame's observations arrive as their own report when they arrive.
+   *
+   * "Once per page" is keyed on the TAB's page, not on the url of whichever frame
+   * happened to report. Keyed on the frame, two frames that each contain an iframe
+   * alternate — and every alternation re-injected into every frame in the tab. Because
+   * re-injection also asks each running frame to report again, each injection produced
+   * the next alternating report: a closed loop that pegged a core for as long as the
+   * page kept reporting, which is the whole time a video plays (§12.1).
    */
   const observeFrames = (tabId: number, report: DetectionReport): void => {
-    if ((report.frameCount ?? 0) <= 0 || framesObserved.get(tabId) === report.pageUrl) {
+    if ((report.frameCount ?? 0) <= 0) {
       return;
     }
-    framesObserved.set(tabId, report.pageUrl);
+    if (framesObserved.has(tabId)) {
+      return;
+    }
+    framesObserved.add(tabId);
     void browser.scripting
       .executeScript({ target: { tabId, allFrames: true }, files: [CONTENT_SCRIPT_FILE] })
       .catch(() => undefined);
