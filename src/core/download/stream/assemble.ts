@@ -938,6 +938,7 @@ async function fetchSegments(
       // broken, and saying so is more useful than "a segment failed" — it tells the
       // user the stream is fine and the host is throttling them (§20.5, §2.8).
       const throttled = index > 0 && (code === 'http-timeout' || code === 'http-network-failed');
+      const host = hostOf(originOf(segment.url) ?? segment.url);
       return err(
         fail(
           throttled
@@ -945,6 +946,9 @@ async function fetchSegments(
             : `Segment ${String(index + 1)} of ${String(segments.length)} failed (${code})`,
           throttled ? 'stream-host-throttled' : 'stream-segment-failed',
           retryable,
+          // Which host and what it said: a refusal the user cannot read is a refusal
+          // they have to describe back to someone (§20.5).
+          { host, status: code },
         ),
       );
     }

@@ -31,6 +31,14 @@ const DEFAULT_TIMEOUT_MS = 5000;
 interface WireError {
   readonly message: string;
   readonly code: string;
+  /**
+   * The error's own contextual data (§20.5) — the host that refused, the status it
+   * answered. Carried because the alternative is what shipped: a refusal that crossed
+   * a process boundary arrived as a bare code, every transport failure collapsed into
+   * "check your network", and diagnosing one took several rounds of asking a person to
+   * describe what their browser had already been told. Contractually non-PII.
+   */
+  readonly context?: Readonly<Record<string, unknown>>;
 }
 
 interface RequestEnvelope {
@@ -81,7 +89,11 @@ function isResponseEnvelope(value: unknown): value is ResponseEnvelope {
 
 function toWireError(error: unknown): WireError {
   if (error instanceof PlatformError) {
-    return { message: error.message, code: error.code };
+    return {
+      message: error.message,
+      code: error.code,
+      ...(error.context !== undefined && { context: error.context }),
+    };
   }
   if (error instanceof Error) {
     return { message: error.message, code: 'messaging-handler-error' };
@@ -231,6 +243,7 @@ export function createMessageBus(api: WebExtApi): MessageBus {
         throw new MessagingError(raw.error?.message ?? 'Message handler failed', {
           code: raw.error?.code ?? 'messaging-handler-error',
           messageKey: 'error.messaging.handler',
+          ...(raw.error?.context !== undefined && { context: raw.error.context }),
         });
       }
       return raw.payload as MessageMap[T]['response'];

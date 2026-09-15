@@ -279,6 +279,18 @@
     "message": "Allow {host}",
     "description": "Popup: queue.allowHost"
   },
+  "error_host_answered": {
+    "message": "{host} answered {status}.",
+    "description": "Popup: error.host.answered"
+  },
+  "error_host_unreadable": {
+    "message": "Could not read {host}. A streaming link usually expires with the page it came from — reload the page and download again.",
+    "description": "Popup: error.host.unreadable"
+  },
+  "error_host_notPermitted": {
+    "message": "AetherDL is not allowed to read {host}.",
+    "description": "Popup: error.host.notPermitted"
+  },
   "queue_summary": {
     "message": "{active} active · {queued} queued",
     "description": "Popup: queue.summary"

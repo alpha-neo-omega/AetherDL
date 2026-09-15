@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.8] — A refusal that says what happened
+
+### Fixed
+
+- **Every transport failure read "Connection problem. Check your network and try again."** — a host
+  answering `403`, a link that had expired, and a genuine dropped connection were all the same
+  sentence, which sends someone to fix something that is not broken (§2.8). Diagnosing one real
+  failure took several rounds of asking a person to describe what their browser had already been
+  told.
+
+  A failure's `context` — which host, what it answered — was discarded three separate times on its
+  way to the surface: the message bus serialised errors as `{message, code}` only, the offscreen
+  boundary rebuilt them from the code alone, and the popup's own normalizer dropped it again. All
+  three now carry it, and the card says what happened:
+
+  > `cdn1020.example.org` answered `http-403`.
+
+  and, when the host refuses so completely that even its answer cannot be read:
+
+  > Could not read `cdn1020.example.org`. A streaming link usually expires with the page it came
+  > from — reload the page and download again.
+
+  That second case is not a guess. A host that sends no `Access-Control-Allow-Origin` on its refusal
+  hides the refusal itself: the browser reports a bare failure with no status, indistinguishable
+  from a dropped connection. Naming the host and the likeliest cause is the honest reading.
+- **`cause` is still dropped, and now `context` is not.** The taxonomy defines `cause` as local-only
+  (stack traces, an underlying library's message) and `context` as safe, non-PII data
+  ([§20.5](PROJECT_BIBLE.md#205-error-messages)). The popup was dropping both; only one of them
+  should ever have been dropped.
+- Segment and playlist failures both attach the host and the status they saw.
+
+### Verification
+
+`npm run ci` exits 0 — 1319 unit tests (+1 skipped), 74 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases.
+
 ## [1.8.7] — The playlist is a host too
 
 ### Fixed

@@ -10,6 +10,7 @@
  * Public API: toAppError, describeError, ErrorDescription.
  */
 import type { AppError, ErrorCategory } from '@shared/result';
+import { STREAM_HOST_NOT_PERMITTED } from '@shared/result/stream';
 import { EN_MESSAGES, type MessageKey, type Translate } from './strings';
 
 const CATEGORIES: ReadonlySet<string> = new Set<ErrorCategory>([
@@ -22,6 +23,32 @@ const CATEGORIES: ReadonlySet<string> = new Set<ErrorCategory>([
   'capability',
   'internal',
 ]);
+
+/** A context value that is safe to put in a sentence. */
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' && value.length <= 120 ? value : undefined;
+}
+
+/**
+ * The sentence a failure's own context can produce, if it carries one.
+ *
+ * Worth the special case because the generic copy actively misleads: a host answering
+ * `403` is not a connection problem, and telling someone to check their network sends
+ * them to fix something that is not broken (§2.8, §20.5).
+ */
+function fromContext(error: AppError, t: Translate): string | undefined {
+  const host = text(error.context?.['host']);
+  if (host === undefined) {
+    return undefined;
+  }
+  if (error.code === STREAM_HOST_NOT_PERMITTED) {
+    return t('error.host.notPermitted', { host });
+  }
+  const status = text(error.context?.['status']);
+  return status === undefined
+    ? t('error.host.unreadable', { host })
+    : t('error.host.answered', { host, status });
+}
 
 function isAppError(value: unknown): value is AppError {
   if (typeof value !== 'object' || value === null) {
@@ -49,6 +76,9 @@ export function toAppError(cause: unknown): AppError {
       code: cause.code,
       messageKey: cause.messageKey,
       retryable: cause.retryable,
+      // Kept, not dropped: it is what lets a failure name the host that refused and
+      // what it answered. The taxonomy guarantees it carries no PII (§20.5).
+      ...(cause.context !== undefined && { context: cause.context }),
     };
   }
   return {
@@ -91,7 +121,7 @@ export function describeError(error: AppError, t: Translate): ErrorDescription {
     : undefined;
   return {
     title: t('error.title'),
-    detail: t(specific ?? CATEGORY_MESSAGE[error.category]),
+    detail: fromContext(error, t) ?? t(specific ?? CATEGORY_MESSAGE[error.category]),
     retryable: error.retryable,
   };
 }

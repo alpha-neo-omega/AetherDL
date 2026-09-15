@@ -98,6 +98,8 @@ function restoreHostError(cause: unknown): unknown {
     code: cause.code,
     messageKey: streamMessageKeyFor(cause.code),
     retryable: streamRetryableFor(cause.code),
+    // Which host, and what it answered: the whole reason a refusal is worth reading.
+    ...(cause.context !== undefined && { context: cause.context }),
     cause,
   };
   return isProtectedStreamCode(cause.code)

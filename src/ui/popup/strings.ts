@@ -86,6 +86,11 @@ export const EN_MESSAGES = {
   'queue.hide': 'Hide queue',
   'queue.empty': 'Nothing queued.',
   'queue.allowHost': 'Allow {host}',
+
+  'error.host.answered': '{host} answered {status}.',
+  'error.host.unreadable':
+    'Could not read {host}. A streaming link usually expires with the page it came from — reload the page and download again.',
+  'error.host.notPermitted': 'AetherDL is not allowed to read {host}.',
   'queue.summary': '{active} active · {queued} queued',
   'queue.clear': 'Clear',
   'queue.clearHint': 'Removes every job except transfers in progress.',
