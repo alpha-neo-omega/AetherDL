@@ -22,6 +22,7 @@ const handlers = {
   onPause: vi.fn(),
   onResume: vi.fn(),
   onRemove: vi.fn(),
+  onAllowHost: vi.fn(),
   onClear: vi.fn(),
 };
 

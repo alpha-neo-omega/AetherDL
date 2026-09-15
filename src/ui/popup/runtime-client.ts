@@ -73,6 +73,12 @@ export interface PopupRuntimeClient {
    * browser only accepts a permission request from a live user gesture.
    */
   requestSiteAccess(origins: readonly string[]): Promise<boolean>;
+  /**
+   * Ask for one host by NAME, for a download that could not read it (§13.7). The
+   * surface never builds the match pattern: it says which host, and the runtime says
+   * how to ask for it.
+   */
+  requestHostAccess(host: string): Promise<boolean>;
   cancel(taskId: string): Promise<void>;
   retry(taskId: string): Promise<void>;
   pause(taskId: string): Promise<void>;

@@ -172,6 +172,7 @@ function PopupSurface(props: {
       show: t('queue.show'),
       hide: t('queue.hide'),
       empty: t('queue.empty'),
+      allowHost: (host: string) => t('queue.allowHost', { host }),
       summary: t('queue.summary'),
       clear: t('queue.clear'),
       clearHint: t('queue.clearHint'),
@@ -411,6 +412,7 @@ function PopupSurface(props: {
         onPause={actions.pause}
         onResume={actions.resume}
         onRemove={actions.remove}
+        onAllowHost={actions.allowHost}
         onClear={actions.clearQueue}
         {...(props.locale !== undefined && { locale: props.locale })}
       />

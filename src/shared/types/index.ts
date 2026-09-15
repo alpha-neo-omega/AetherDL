@@ -426,6 +426,16 @@ export interface MessageMap {
    * names for the user to decide about.
    */
   readonly 'detection/embeds': MessageExchange<{ readonly tabId: number }, readonly string[]>;
+  /**
+   * Whether these host patterns are granted. Asked by the offscreen document, which
+   * assembles streams but cannot reach the permissions API itself (§7.4): it needs to
+   * tell "we may not read this host" from "the network failed", because the browser
+   * reports both as the same rejection and only one of them is worth retrying.
+   */
+  readonly 'permissions/contains': MessageExchange<
+    { readonly origins: readonly string[] },
+    boolean
+  >;
   /** Enqueue detected media by identity key; the background resolves the items. */
   readonly 'download/enqueue': MessageExchange<
     {

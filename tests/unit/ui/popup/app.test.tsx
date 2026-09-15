@@ -755,6 +755,71 @@ describe('ui/popup PopupApp — a player embedded from another site (§13.7)', (
   });
 });
 
+describe('ui/popup PopupApp — a download blocked by host access (§13.7)', () => {
+  const blocked = (host: string) =>
+    downloadTask({
+      id: 'blocked',
+      item: mediaItem({ id: 'stream', title: 'Clip', kind: 'stream' }),
+      state: 'failed',
+      error: {
+        category: 'permission',
+        code: 'stream-host-not-permitted',
+        messageKey: 'error.permission.host',
+        retryable: false,
+        context: { origin: `https://${host}/*`, host },
+      },
+    });
+
+  it('offers the host instead of a retry that cannot work', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'stream', title: 'Clip', kind: 'stream' })]);
+    fake.setTasks([blocked('cdn.example')]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+
+    // Retrying is offered for a transport failure. This is not one: nothing changes
+    // until the user answers, so the offer must be the question itself.
+    expect(requireByName(view.container, 'Allow cdn.example')).toBeDefined();
+    expect(byName(view.container, 'Retry: Clip')).toBeUndefined();
+    view.unmount();
+  });
+
+  it('asks for the host, then runs the job again once it is granted', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'stream', title: 'Clip', kind: 'stream' })]);
+    fake.setTasks([blocked('cdn.example')]);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+    click(requireByName(view.container, 'Allow cdn.example'));
+    await flush();
+
+    const requested = fake.calls.indexOf('requestHostAccess:cdn.example');
+    expect(requested).toBeGreaterThanOrEqual(0);
+    expect(fake.calls.indexOf('retry:blocked')).toBeGreaterThan(requested);
+    view.unmount();
+  });
+
+  it('does not run the job again when the user declines', async () => {
+    const fake = createFakeRuntimeClient();
+    fake.setItems([mediaItem({ id: 'stream', title: 'Clip', kind: 'stream' })]);
+    fake.setTasks([blocked('cdn.example')]);
+    fake.setSiteAccess(false);
+    const view = await mount(fake);
+
+    click(requireByName(view.container, 'Show queue'));
+    await flush();
+    click(requireByName(view.container, 'Allow cdn.example'));
+    await flush();
+
+    expect(fake.calls).not.toContain('retry:blocked');
+    view.unmount();
+  });
+});
+
 describe('ui/popup PopupApp — why a job failed (§20.5)', () => {
   it('shows the reason on a failed job, not just the word "Failed"', async () => {
     const fake = createFakeRuntimeClient();

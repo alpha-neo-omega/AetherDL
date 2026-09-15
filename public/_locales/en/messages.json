@@ -275,6 +275,10 @@
     "message": "Nothing queued.",
     "description": "Popup: queue.empty"
   },
+  "queue_allowHost": {
+    "message": "Allow {host}",
+    "description": "Popup: queue.allowHost"
+  },
   "queue_summary": {
     "message": "{active} active · {queued} queued",
     "description": "Popup: queue.summary"

@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.6] — A host we may not read is not a network problem
+
+### Fixed
+
+- **A stream download that retried forever instead of either working or failing.** Reported on a
+  site whose stream is now detected correctly: the download went into retry and never completed.
+
+  A cross-origin read the extension holds no permission for rejects with the same `TypeError` as a
+  dropped connection, so it arrived as `http-network-failed` — **retryable** — and was attempted
+  five times with exponential backoff, per segment, before failing the job, which the queue then
+  retried in turn. Nothing about waiting could have changed the answer.
+
+  It is also the common case rather than an edge one: host access is requested when the download is
+  clicked, but only for the **manifest's** origin, because that is the only origin knowable before
+  the manifest has been read. Segments routinely live somewhere else, and that origin was never
+  asked for.
+
+  Assembly now asks — once, and only after a read has already failed — whether the origin is
+  permitted at all. If it is not, the download fails **immediately**, is not retryable, and names
+  the host. A permitted host that fails is still treated as weather and still retried.
+- **The refusal is now answerable.** A job that failed for want of host access offers **Allow
+  `<host>`** in the queue, in place of a retry that cannot work. The click is the user gesture a
+  permission request requires — which is exactly why this belongs on the job and cannot live in the
+  background. Granting runs the job again; declining leaves it alone and reports nothing.
+
+  The surface passes the host NAME and nothing else: building the match pattern is the runtime's
+  job, so no URL is embedded in a UI bundle (§13.2, caught by the security gate rather than by
+  review).
+
+### Verification
+
+`npm run ci` exits 0 — 1312 unit tests (+1 skipped), 74 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases. The four new
+behaviours were confirmed red against the code they replace.
+
 ## [1.8.5] — The injection loop
 
 ### Fixed

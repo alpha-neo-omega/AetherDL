@@ -85,6 +85,7 @@ export const EN_MESSAGES = {
   'queue.show': 'Show queue',
   'queue.hide': 'Hide queue',
   'queue.empty': 'Nothing queued.',
+  'queue.allowHost': 'Allow {host}',
   'queue.summary': '{active} active · {queued} queued',
   'queue.clear': 'Clear',
   'queue.clearHint': 'Removes every job except transfers in progress.',

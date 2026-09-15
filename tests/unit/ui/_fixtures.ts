@@ -108,6 +108,7 @@ export function queueLabels(): QueuePanelLabels {
     remove: t('queue.remove'),
     progressLabel: t('card.progress'),
     taskState: taskStates(),
+    allowHost: (host: string) => `Allow ${host}`,
     describeFailure: (error) => describeError(error, t).detail,
   };
 }
@@ -241,6 +242,7 @@ export function createFakeRuntimeClient(): FakeRuntimeClient {
         guard<boolean>('hasSiteAccess', origins.join(','), embeddedGranted),
       requestSiteAccess: (origins: readonly string[]) =>
         guard<boolean>('requestSiteAccess', origins.join(','), siteAccess),
+      requestHostAccess: (host: string) => guard<boolean>('requestHostAccess', host, siteAccess),
       cancel: (id: string) => guard<void>('cancel', id, undefined),
       retry: (id: string) => guard<void>('retry', id, undefined),
       pause: (id: string) => guard<void>('pause', id, undefined),

@@ -129,6 +129,18 @@ export function createPopupRuntimeClient(browser: Browser): PopupRuntimeClient {
       return origins.filter((origin) => origin !== activeOrigin);
     },
 
+    /**
+     * Both schemes for one host, in the form a permission request takes. A stream
+     * whose segments are refused names its host; granting it is the answer, and the
+     * grant is per-host and revocable like every other (§13.7, §4.15).
+     */
+    requestHostAccess(host: string): Promise<boolean> {
+      if (host === '' || host.includes('/') || host.includes('*')) {
+        return Promise.resolve(false);
+      }
+      return browser.permissions.requestHosts([`*://${host}/*`]);
+    },
+
     hasSiteAccess(origins: readonly string[]): Promise<boolean> {
       if (origins.length === 0) {
         return Promise.resolve(true);

@@ -98,6 +98,17 @@ export function createStreamAssemblyHost(options: StreamAssemblyHostOptions): St
   const delivery = createLocalStreamDelivery({
     http: options.http ?? createHttpClient(),
     objectUrl: createObjectUrlAdapter(),
+    // Asked of the service worker rather than answered here: an offscreen document
+    // reaches only a small subset of extension APIs, and the permissions namespace is
+    // not one it can rely on (§7.4). Only ever asked after a read has already failed.
+    isHostPermitted: async (origin) => {
+      try {
+        return await bus.send('permissions/contains', { origins: [origin] });
+      } catch {
+        // Unable to tell: the failure keeps whatever class it already had.
+        return true;
+      }
+    },
   });
   // Held so a later `stream/release` can revoke exactly what it was given, and so
   // dispose() cannot leak a stream-sized blob (§8.9, §12.1).

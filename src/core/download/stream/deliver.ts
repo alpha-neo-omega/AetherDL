@@ -25,6 +25,12 @@ export interface LocalStreamDeliveryOptions {
   readonly objectUrl: ObjectUrlAdapter;
   /** Overrides the assembly ceiling; the assembler's default applies otherwise. */
   readonly maxTotalBytes?: number;
+  /**
+   * Whether the extension holds permission for an origin. Passed through so assembly
+   * can tell "we may not read this host" from "the network failed" — they arrive as
+   * the same rejection, and only one of them is worth retrying (§13.7, §20.3).
+   */
+  readonly isHostPermitted?: (origin: string) => Promise<boolean>;
 }
 
 export function createLocalStreamDelivery(
@@ -52,6 +58,7 @@ export function createLocalStreamDelivery(
         ...(request.signal !== undefined && { signal: request.signal }),
         ...(request.onProgress !== undefined && { onProgress: request.onProgress }),
         ...(ceiling !== undefined && { maxTotalBytes: ceiling }),
+        ...(options.isHostPermitted !== undefined && { isHostPermitted: options.isHostPermitted }),
       });
       if (!assembled.ok) {
         // The assembler's error already carries the code, the retryable flag and a

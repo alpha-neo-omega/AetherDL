@@ -28,7 +28,14 @@ import { createLocalStreamDelivery } from '@core/download/stream/deliver';
 export function resolveStreamDelivery(browser: Browser): StreamDeliveryAdapter | undefined {
   const objectUrl = createObjectUrlAdapter();
   if (objectUrl.supported) {
-    return createLocalStreamDelivery({ http: createHttpClient(), objectUrl });
+    return createLocalStreamDelivery({
+      http: createHttpClient(),
+      objectUrl,
+      // Assembly reads hosts the manifest only names once it has been read, so a
+      // segment can sit on an origin the download-time grant never covered. Without
+      // this, that arrives as an ordinary network failure and is retried (§13.7).
+      isHostPermitted: (origin) => browser.permissions.containsHosts([origin]),
+    });
   }
   return browser.stream?.supported === true ? browser.stream : undefined;
 }

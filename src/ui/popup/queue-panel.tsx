@@ -15,6 +15,7 @@ import { formatBytes } from '@shared/utils';
 import type { AppError } from '@shared/result';
 import type { DownloadTask, TaskState } from '@shared/types';
 import { Button, IconButton, ProgressBar } from '@ui/components';
+import { STREAM_HOST_NOT_PERMITTED } from '@shared/result/stream';
 
 export interface QueuePanelLabels {
   readonly title: string;
@@ -38,6 +39,8 @@ export interface QueuePanelLabels {
    * permission and a full disk are the same word and different problems (§20.5).
    */
   readonly describeFailure: (error: AppError) => string;
+  /** Label for the grant offered on a job that failed for want of host access. */
+  readonly allowHost: (host: string) => string;
 }
 
 export interface QueuePanelProps {
@@ -45,6 +48,12 @@ export interface QueuePanelProps {
   readonly labels: QueuePanelLabels;
   readonly onCancel: (taskId: string) => void;
   readonly onRetry: (taskId: string) => void;
+  /**
+   * Grant a host a failed job could not read, then run it again. The click is the
+   * gesture the browser requires for a permission request, which is precisely why
+   * this belongs on the job rather than anywhere in the background (§13.7).
+   */
+  readonly onAllowHost: (taskId: string, host: string) => void;
   readonly onPause: (taskId: string) => void;
   readonly onResume: (taskId: string) => void;
   readonly onRemove: (taskId: string) => void;
@@ -76,6 +85,20 @@ function bytesLine(task: DownloadTask, locale: string | undefined): string | und
     return total;
   }
   return total === undefined ? received : `${received} / ${total}`;
+}
+
+/**
+ * The host a failed job could not read, when that is why it failed.
+ *
+ * Read from the error's own context rather than parsed out of its message: assembly
+ * puts the match pattern there precisely so a surface can ask for it (§20.5).
+ */
+function hostToAllow(error: AppError | undefined): string | undefined {
+  if (error?.code !== STREAM_HOST_NOT_PERMITTED) {
+    return undefined;
+  }
+  const host = (error.context as Record<string, unknown> | undefined)?.['host'];
+  return typeof host === 'string' && host !== '' ? host : undefined;
 }
 
 export function QueuePanel(props: QueuePanelProps): ReactNode {
@@ -126,6 +149,9 @@ export function QueuePanel(props: QueuePanelProps): ReactNode {
             {tasks.map((task) => {
               const bytes = bytesLine(task, props.locale);
               const retryable = task.state === 'failed' && task.error?.retryable !== false;
+              // A job that failed because a host is not granted is not retryable and
+              // must not be offered as such: nothing changes until the user says yes.
+              const blockedHost = task.state === 'failed' ? hostToAllow(task.error) : undefined;
               return (
                 <li className="adl-queue__item" key={task.id}>
                   <div className="adl-queue__item-head">
@@ -162,6 +188,16 @@ export function QueuePanel(props: QueuePanelProps): ReactNode {
                           props.onResume(task.id);
                         }}
                       />
+                    )}
+                    {blockedHost !== undefined && (
+                      <Button
+                        variant="tonal"
+                        onClick={() => {
+                          props.onAllowHost(task.id, blockedHost);
+                        }}
+                      >
+                        {labels.allowHost(blockedHost)}
+                      </Button>
                     )}
                     {retryable && (
                       <IconButton

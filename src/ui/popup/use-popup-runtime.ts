@@ -74,6 +74,11 @@ export interface PopupRuntimeActions {
    * simply leaves the prompt in place; nothing is retried behind their back.
    */
   allowEmbeddedAccess(): void;
+  /**
+   * Grant a host a download could not read, then run that job again. Reached from the
+   * job itself, because the click is the gesture a permission request needs.
+   */
+  allowHost(taskId: string, host: string): void;
   /** Queue one item at the rendition the user picked. */
   downloadRendition(itemId: string, renditionId: string): void;
   closeChooser(): void;
@@ -409,6 +414,22 @@ export function usePopupRuntime(
               // Now that the frame may be entered, look again: its own observations
               // arrive as their own detection run (§8.10).
               void client.refreshDetection(tabId).catch(() => undefined);
+            }
+          },
+          (cause: unknown) => {
+            dispatch({ type: 'notice', error: toAppError(cause) });
+          },
+        );
+      },
+      allowHost: (taskId, host) => {
+        // First statement in the handler: a permission request is only accepted while
+        // the click is still live (§13.7). The UI passes the HOST and nothing else —
+        // turning it into a match pattern is the runtime's job, and a surface that
+        // never contains a URL cannot smuggle one (§13.2).
+        void client.requestHostAccess(host).then(
+          (granted) => {
+            if (granted) {
+              run(client.retry(taskId));
             }
           },
           (cause: unknown) => {

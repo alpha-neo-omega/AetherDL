@@ -9,9 +9,20 @@
  *          the error, and the platform client rebuilds it from the wire, where a
  *          message only carries a code. Without this, every Chromium stream refusal
  *          reached the user as a generic messaging failure.
- * Public API: STREAM_ERROR_CODE_PREFIXES, isStreamErrorCode, isProtectedStreamCode,
- *          streamMessageKeyFor, streamRetryableFor.
+ * Public API: STREAM_ERROR_CODE_PREFIXES, STREAM_HOST_NOT_PERMITTED, isStreamErrorCode,
+ *          isProtectedStreamCode, streamMessageKeyFor, streamRetryableFor.
  */
+
+/**
+ * A host the extension holds no permission for.
+ *
+ * Distinct from every other transport failure because the browser reports it as one:
+ * a cross-origin read the extension may not make rejects with the same `TypeError` as
+ * a dropped connection, so it arrived as `http-network-failed` and was RETRIED — five
+ * times, with backoff, per segment, for something no attempt could ever succeed at.
+ * It is not a network condition; it is a question for the user (§13.7, §20.3).
+ */
+export const STREAM_HOST_NOT_PERMITTED = 'stream-host-not-permitted';
 
 /** Codes produced by the assembly path and its HTTP client. */
 export const STREAM_ERROR_CODE_PREFIXES: readonly string[] = ['stream-', 'http-'];
@@ -51,6 +62,9 @@ export function streamMessageKeyFor(code: string): string {
   ) {
     return 'error.download.stream.tracks';
   }
+  if (code === STREAM_HOST_NOT_PERMITTED) {
+    return 'error.permission.host';
+  }
   if (
     code === 'stream-manifest-fetch-failed' ||
     code === 'stream-segment-failed' ||
@@ -67,6 +81,10 @@ export function streamMessageKeyFor(code: string): string {
  * about what the stream IS never can, and retrying one only wastes the user's time.
  */
 export function streamRetryableFor(code: string): boolean {
+  // Never: the answer changes when the USER grants the host, not when we ask again.
+  if (code === STREAM_HOST_NOT_PERMITTED) {
+    return false;
+  }
   if (
     code === 'stream-manifest-fetch-failed' ||
     code === 'stream-segment-failed' ||

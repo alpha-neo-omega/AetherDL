@@ -1287,6 +1287,62 @@ describe('core/download/stream riding out a throttling host (§10.4)', () => {
     expect(http.attempts()).toBe(1);
   });
 
+  it('does not retry a host it is not allowed to read, and names it', async () => {
+    // A cross-origin read the extension has no permission for rejects with the same
+    // TypeError as a dropped connection, so it arrived as a retryable network failure
+    // and was attempted five times with backoff, per segment, for something no attempt
+    // could ever succeed at. It is a question for the user, not weather (§13.7).
+    const blocked = new NetworkError('Request could not be completed', {
+      code: 'http-network-failed',
+      messageKey: 'error.network',
+      retryable: true,
+    });
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 99, blocked);
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: instantly,
+      isHostPermitted: () => Promise.resolve(false),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error.code).toBe('stream-host-not-permitted');
+    expect(result.ok || result.error.retryable).toBe(false);
+    // The host is named, and carried as a match pattern the surface can request.
+    expect(result.ok || result.error.message).toContain('cdn.test');
+    expect(result.ok || result.error.context?.['origin']).toBe('https://cdn.test/*');
+    expect(http.attempts()).toBe(1);
+  });
+
+  it('still treats a network failure on a PERMITTED host as worth retrying', async () => {
+    // The distinction has to cut both ways, or a flaky connection becomes a dead end.
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 2, timeout());
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: instantly,
+      isHostPermitted: () => Promise.resolve(true),
+    });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    expect(http.attempts()).toBe(3);
+  });
+
+  it('keeps the old behaviour when nothing can answer whether the host is allowed', async () => {
+    const http = flakyHttp('https://cdn.test/hls/b.ts', 2, timeout());
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http: http.client,
+      wait: instantly,
+      isHostPermitted: () => Promise.reject(new Error('cannot ask')),
+    });
+
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+  });
+
   it('backs off between attempts instead of hammering the host', async () => {
     const waits: number[] = [];
     const http = flakyHttp('https://cdn.test/hls/b.ts', 3, timeout());

@@ -442,6 +442,23 @@ export function createBackgroundRuntime(deps: BackgroundRuntimeDeps): Background
         const tabId = extractTabId(request);
         return tabId === undefined ? [] : state.getItems(tabId);
       }),
+      // Answered for the offscreen document, which assembles streams without reaching
+      // the permissions API itself (§7.4). A read, never a request: nothing is granted
+      // by asking, and the answer only decides whether a failure is worth retrying.
+      bus.on('permissions/contains', async (request) => {
+        const origins =
+          typeof request === 'object' && request !== null
+            ? (request as Record<string, unknown>)['origins']
+            : undefined;
+        if (!Array.isArray(origins) || origins.some((origin) => typeof origin !== 'string')) {
+          return false;
+        }
+        try {
+          return await browser.permissions.containsHosts(origins as readonly string[]);
+        } catch {
+          return false;
+        }
+      }),
       // The origins this tab embeds players from, for a surface to offer (§13.7).
       // Answering names an origin; it grants nothing and requests nothing.
       bus.on('detection/embeds', (request) => {

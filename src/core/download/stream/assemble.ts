@@ -17,7 +17,11 @@
  *          listStreamRenditions, PlannedSegment, FetchPlan.
  */
 import { err, ok, type Result } from '@shared/result';
-import { isProtectedStreamCode, streamMessageKeyFor } from '@shared/result/stream';
+import {
+  isProtectedStreamCode,
+  streamMessageKeyFor,
+  STREAM_HOST_NOT_PERMITTED,
+} from '@shared/result/stream';
 import { PlatformError } from '@shared/result/errors';
 import { StreamAssemblyError, StreamProtectedError } from '@core/download/errors';
 import { manifestTypeFromUrl, sniffFormat } from '@shared/utils';
@@ -122,6 +126,18 @@ export interface AssembleRequest {
   readonly wait?: (ms: number) => Promise<void>;
   /** Injectable clock, for the same reason. */
   readonly clock?: () => number;
+  /**
+   * Whether the extension is allowed to read this origin at all.
+   *
+   * A cross-origin read the extension holds no permission for rejects with the same
+   * `TypeError` as a dropped connection, so assembly could not tell "the network
+   * blipped" from "we may not look" — and retried the second one five times with
+   * backoff, per segment. Segments routinely live on an origin the MANIFEST's grant
+   * never covered, which is exactly when this fires (§13.7, §20.3).
+   *
+   * Optional: a caller that cannot answer simply keeps the old behaviour.
+   */
+  readonly isHostPermitted?: (origin: string) => Promise<boolean>;
 }
 
 export interface AssembledStream {
@@ -172,8 +188,18 @@ export function streamOriginsFor(manifestUrl: string): readonly string[] {
  * class and the message key. The mapping lives in `shared` because the Chromium
  * client rebuilds these errors from the wire, where only the code survives (§20.5).
  */
-function fail(message: string, code: string, retryable = false): StreamAssemblyError {
-  const options = { code, messageKey: streamMessageKeyFor(code), retryable };
+function fail(
+  message: string,
+  code: string,
+  retryable = false,
+  context?: Readonly<Record<string, unknown>>,
+): StreamAssemblyError {
+  const options = {
+    code,
+    messageKey: streamMessageKeyFor(code),
+    retryable,
+    ...(context !== undefined && { context }),
+  };
   // Encryption is not a network condition and must never be retried; it gets its own
   // class so every consumer classifies it as protected media (§6).
   return isProtectedStreamCode(code)
@@ -727,6 +753,41 @@ interface FetchState {
  * (§10.4). The delay between attempts is short and fixed — this is riding out a
  * throttle, not backing off a queue.
  */
+/** A match pattern (`https://host/*`) as the host a person would recognise. */
+function hostOf(pattern: string): string {
+  return pattern.replace(/^https?:\/\//i, '').replace(/\/\*$/, '');
+}
+
+/**
+ * The origin this failure is about, when the reason is that we may not read it.
+ *
+ * Only a transport-level failure can be a permission problem: a host that ANSWERS —
+ * with a 403, a 404, a 500 — is one the browser let us reach, whatever it then said.
+ */
+async function unpermittedOrigin(
+  request: AssembleRequest,
+  url: string,
+  cause: unknown,
+): Promise<string | undefined> {
+  if (request.isHostPermitted === undefined) {
+    return undefined;
+  }
+  const { code } = describeHttpFailure(cause);
+  if (code !== 'http-network-failed' && code !== 'http-unknown') {
+    return undefined;
+  }
+  const origin = originOf(url);
+  if (origin === undefined) {
+    return undefined;
+  }
+  try {
+    return (await request.isHostPermitted(origin)) ? undefined : origin;
+  } catch {
+    // Unable to tell: fall back to treating it as the transport failure it looked like.
+    return undefined;
+  }
+}
+
 async function fetchWithRetries(
   request: AssembleRequest,
   segment: PlannedSegment,
@@ -753,6 +814,19 @@ async function fetchWithRetries(
       });
     } catch (cause) {
       lastError = cause;
+      // Before treating this as weather: is it even allowed? Asked only once the read
+      // has actually failed, so a permitted host costs nothing (§13.7).
+      const refused = await unpermittedOrigin(request, segment.url, cause);
+      if (refused !== undefined) {
+        throw fail(
+          `AetherDL is not allowed to read ${hostOf(refused)}, where this stream's segments are served from`,
+          STREAM_HOST_NOT_PERMITTED,
+          false,
+          // The match pattern, because that is what a permission request takes; the
+          // surface shows the host and asks for exactly this (§13.7).
+          { origin: refused, host: hostOf(refused) },
+        );
+      }
       const retryable = cause instanceof PlatformError && cause.retryable;
       const elapsed = (request.clock?.() ?? Date.now()) - startedAt;
       if (
@@ -826,6 +900,13 @@ async function fetchSegments(
         }
       }
     } catch (cause) {
+      // A refusal that already knows what it is — "this host is not granted" — keeps
+      // its own code, its own retryability and its own context. Re-describing it as a
+      // generic segment failure is what put a permission question back into the retry
+      // loop it was raised to escape (§20.5).
+      if (cause instanceof StreamAssemblyError || cause instanceof StreamProtectedError) {
+        return err(cause as StreamAssemblyError);
+      }
       const { code, retryable } = describeHttpFailure(cause);
       // A host that answered the first segments and then stopped is rate-limiting, not
       // broken, and saying so is more useful than "a segment failed" — it tells the
