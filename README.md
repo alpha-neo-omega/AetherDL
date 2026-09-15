@@ -24,7 +24,7 @@ dependencies without approval (see [PROJECT_BIBLE.md §25](PROJECT_BIBLE.md#25-c
 
 ## Status
 
-**1.8.6 — the player on another site, 2026-08-27.** Built on the 1.0.0
+**1.8.7 — the player on another site, 2026-08-27.** Built on the 1.0.0
 stable release: per-tab media detection, downloads through the browser's own download manager
 with a durable queue, retry and pause/resume, settings, local history, popup and settings
 surfaces, and the optional context-menu and notification integrations. Then 1.1.0 added stream

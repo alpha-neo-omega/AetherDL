@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.7] — The playlist is a host too
+
+### Fixed
+
+- **1.8.6 checked the segments and forgot the playlist.** The download still retried forever, and it
+  was failing before it ever reached a segment. `fetchText` — which fetches the playlist, and every
+  media playlist inside it — had no permission check at all, and `stream-manifest-fetch-failed` is
+  retryable. A playlist detected from its NAME, which is what happens when the probe could not read
+  it either, reaches the download with that refusal still unanswered and is the very first request
+  made.
+
+  The playlist path now asks the same question the segments do, fails immediately when the answer is
+  "not allowed", and names the host — so the same **Allow `<host>`** offer appears on the job.
+- **A refusal that cannot be read is one more round trip through a person's patience.** "Manifest
+  could not be fetched" now reads "The playlist at `<host>` could not be fetched (`http-403`)". Three
+  rounds of diagnosis were spent on failures that would not say which host or what answer
+  ([§20.5](PROJECT_BIBLE.md#205-error-messages), §2.8).
+
+### Verification
+
+`npm run ci` exits 0 — 1314 unit tests (+1 skipped), 74 performance assertions, both builds, manifest
+validation, the security gate (PASS on both targets), packaging, 61 browser e2e cases. Both new
+behaviours were confirmed red against the code they replace.
+
 ## [1.8.6] — A host we may not read is not a network problem
 
 ### Fixed

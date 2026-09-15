@@ -1287,6 +1287,54 @@ describe('core/download/stream riding out a throttling host (§10.4)', () => {
     expect(http.attempts()).toBe(1);
   });
 
+  it('does not retry a PLAYLIST host it is not allowed to read, and names it', async () => {
+    // The playlist is the first thing fetched, and it is exactly what a URL-named
+    // detection never actually read. Segments were covered; this was not, so the
+    // download still retried forever on the very first request it made.
+    const blocked = new NetworkError('Request could not be completed', {
+      code: 'http-network-failed',
+      messageKey: 'error.network',
+      retryable: true,
+    });
+    const http: HttpClient = {
+      get: () => Promise.reject(blocked),
+      getText: () => Promise.reject(blocked),
+    } as unknown as HttpClient;
+
+    const result = await assembleStream({
+      manifestUrl: playlist,
+      http,
+      wait: instantly,
+      isHostPermitted: () => Promise.resolve(false),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error.code).toBe('stream-host-not-permitted');
+    expect(result.ok || result.error.retryable).toBe(false);
+    expect(result.ok || result.error.context?.['host']).toBe('cdn.test');
+  });
+
+  it('names the host and the status when a playlist simply cannot be fetched', async () => {
+    // Three rounds of diagnosis were spent on failures that said only "a manifest
+    // could not be fetched". The refusal now carries what a person would need (§20.5).
+    const refused = new HttpError('Request answered 403', {
+      code: 'http-403',
+      messageKey: 'error.network',
+      retryable: false,
+    });
+    const http: HttpClient = {
+      get: () => Promise.reject(refused),
+      getText: () => Promise.reject(refused),
+    } as unknown as HttpClient;
+
+    const result = await assembleStream({ manifestUrl: playlist, http, wait: instantly });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error.code).toBe('stream-manifest-fetch-failed');
+    expect(result.ok || result.error.message).toContain('cdn.test');
+    expect(result.ok || result.error.message).toContain('http-403');
+  });
+
   it('does not retry a host it is not allowed to read, and names it', async () => {
     // A cross-origin read the extension has no permission for rejects with the same
     // TypeError as a dropped connection, so it arrived as a retryable network failure

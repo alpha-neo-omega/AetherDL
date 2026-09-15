@@ -289,16 +289,43 @@ function describeHttpFailure(cause: unknown): {
 }
 
 async function fetchText(
-  http: HttpClient,
+  request: AssembleRequest,
   url: string,
-  signal: AbortSignal | undefined,
 ): Promise<Result<string, StreamAssemblyError>> {
   try {
-    return ok(await http.getText(url, signal !== undefined ? { signal } : {}));
+    return ok(
+      await request.http.getText(
+        url,
+        request.signal !== undefined ? { signal: request.signal } : {},
+      ),
+    );
   } catch (cause) {
+    // The same question the segments ask, for the same reason: a playlist on a host
+    // the extension may not read fails exactly like a playlist on a host that is
+    // down, and only one of the two is worth trying again (§13.7, §20.3). A playlist
+    // detected from its NAME — which happens when the probe could not read it either
+    // — reaches this with the refusal still unanswered.
+    const refused = await unpermittedOrigin(request, url, cause);
+    if (refused !== undefined) {
+      return err(
+        fail(
+          `AetherDL is not allowed to read ${hostOf(refused)}, where this stream's playlist is served from`,
+          STREAM_HOST_NOT_PERMITTED,
+          false,
+          { origin: refused, host: hostOf(refused) },
+        ),
+      );
+    }
     const { code, retryable } = describeHttpFailure(cause);
     return err(
-      fail(`Manifest could not be fetched (${code})`, 'stream-manifest-fetch-failed', retryable),
+      fail(
+        // The host and the code, because a refusal nobody can read is one more round
+        // trip through a person's patience (§20.5, §2.8).
+        `The playlist at ${hostOf(originOf(url) ?? url)} could not be fetched (${code})`,
+        'stream-manifest-fetch-failed',
+        retryable,
+        { host: hostOf(originOf(url) ?? url), status: code },
+      ),
     );
   }
 }
@@ -308,7 +335,7 @@ async function planHlsMedia(
   request: AssembleRequest,
   url: string,
 ): Promise<Result<readonly PlannedSegment[], StreamAssemblyError>> {
-  const text = await fetchText(request.http, url, request.signal);
+  const text = await fetchText(request, url);
   if (!text.ok) {
     return text;
   }
@@ -377,11 +404,10 @@ function chooseAudio(
 
 /** Resolve an HLS URL to a concrete segment list, following ONE master playlist. */
 async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, StreamAssemblyError>> {
-  const { http, manifestUrl, signal } = request;
-  let url = manifestUrl;
+  let url = request.manifestUrl;
 
   for (let hop = 0; hop < 2; hop += 1) {
-    const text = await fetchText(http, url, signal);
+    const text = await fetchText(request, url);
     if (!text.ok) {
       return text;
     }
@@ -453,7 +479,7 @@ async function planHls(request: AssembleRequest): Promise<Result<FetchPlan, Stre
 }
 
 async function planDash(request: AssembleRequest): Promise<Result<FetchPlan, StreamAssemblyError>> {
-  const text = await fetchText(request.http, request.manifestUrl, request.signal);
+  const text = await fetchText(request, request.manifestUrl);
   if (!text.ok) {
     return text;
   }
@@ -530,7 +556,7 @@ export async function listStreamRenditions(
   if (kind === undefined) {
     return err(fail('URL is not an HLS or DASH manifest', 'stream-not-a-manifest'));
   }
-  const text = await fetchText(request.http, request.manifestUrl, request.signal);
+  const text = await fetchText(request, request.manifestUrl);
   if (!text.ok) {
     return text;
   }
